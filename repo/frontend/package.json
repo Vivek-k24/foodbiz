@@ -1,0 +1,9 @@
+{
+  "name": "rop-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "dev": "pnpm --filter web-ordering dev"
+  }
+}
