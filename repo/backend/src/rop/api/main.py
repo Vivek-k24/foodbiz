@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from prometheus_client import Counter, Histogram
@@ -12,6 +14,11 @@ from rop.api.middleware.request_id import RequestIDMiddleware
 from rop.api.routes.health import router as health_router
 from rop.api.routes.menu import router as menu_router
 from rop.api.routes.metrics import router as metrics_router
+from rop.api.routes.orders import router as orders_router
+from rop.api.routes.tables import router as tables_router
+from rop.api.ws.manager import ConnectionManager
+from rop.api.ws.routes import router as ws_router
+from rop.infrastructure.messaging.redis_event_listener import start_redis_fanout
 from rop.infrastructure.observability.logging_config import configure_logging
 from rop.infrastructure.observability.otel import configure_otel
 
@@ -66,13 +73,29 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         return response
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.ws_manager = ConnectionManager()
+    fanout_task = asyncio.create_task(start_redis_fanout(app.state))
+    app.state.redis_fanout_task = fanout_task
+    try:
+        yield
+    finally:
+        fanout_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await fanout_task
+
+
 def create_app() -> FastAPI:
     configure_logging()
 
-    app = FastAPI(title="ROP Backend", version="0.1.0")
+    app = FastAPI(title="ROP Backend", version="0.1.0", lifespan=lifespan)
     app.include_router(health_router)
     app.include_router(metrics_router)
     app.include_router(menu_router)
+    app.include_router(tables_router)
+    app.include_router(orders_router)
+    app.include_router(ws_router)
 
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(RequestIDMiddleware)

@@ -26,3 +26,31 @@ class MenuResponse(BaseModel):
     categories: list[str] = Field(default_factory=list)
     items: list[MenuItemResponse] = Field(default_factory=list)
     updatedAt: datetime
+
+
+class OrderLineResponse(BaseModel):
+    lineId: str
+    itemId: str
+    name: str
+    quantity: int
+    unitPrice: MoneyResponse
+    lineTotal: MoneyResponse
+    notes: str | None = None
+
+
+class OrderResponse(BaseModel):
+    orderId: str
+    restaurantId: str
+    tableId: str
+    status: str
+    lines: list[OrderLineResponse] = Field(default_factory=list)
+    total: MoneyResponse
+    createdAt: datetime
+
+
+class TableResponse(BaseModel):
+    tableId: str
+    restaurantId: str
+    status: str
+    openedAt: datetime | None = None
+    closedAt: datetime | None = None

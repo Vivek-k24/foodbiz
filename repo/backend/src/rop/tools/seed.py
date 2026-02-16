@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import inspect
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from rop.infrastructure.db.models.menu import MenuItemModel, MenuModel, RestaurantModel
+from rop.infrastructure.db.models.table import TableModel
 from rop.infrastructure.db.session import get_engine
 
 
 def main() -> None:
     engine = get_engine(timeout_seconds=2.0)
     inspector = inspect(engine)
-    required_tables = {"restaurants", "menus", "menu_items"}
+    required_tables = {"restaurants", "menus", "menu_items", "tables"}
     if not required_tables.issubset(set(inspector.get_table_names(schema="public"))):
         print("no schema yet")
         return
@@ -90,6 +93,26 @@ def main() -> None:
                     },
                 )
             )
+
+        session.execute(
+            insert(TableModel)
+            .values(
+                id="tbl_001",
+                restaurant_id="rst_001",
+                status="OPEN",
+                opened_at=datetime.now(timezone.utc),
+                closed_at=None,
+            )
+            .on_conflict_do_update(
+                index_elements=[TableModel.id],
+                set_={
+                    "restaurant_id": "rst_001",
+                    "status": "OPEN",
+                    "opened_at": datetime.now(timezone.utc),
+                    "closed_at": None,
+                },
+            )
+        )
 
         session.commit()
         print("seed complete")

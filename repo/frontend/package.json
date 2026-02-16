@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.15.0",
   "scripts": {
-    "dev": "pnpm --filter web-ordering dev"
+    "dev": "pnpm --filter web-ordering dev",
+    "dev:dashboard": "pnpm --filter dashboard dev"
   }
 }
