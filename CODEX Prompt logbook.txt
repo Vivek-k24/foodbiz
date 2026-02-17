@@ -1,0 +1,1531 @@
+## Architecture overview + key decisions
+
+### High-level architecture (modular monolith → extractable services)
+
+Start as a **domain-first modular monolith** (single deployable, multiple bounded modules), because:
+
+* fastest to ship while keeping **clean boundaries**
+* simplest operability day-1 (one DB, one deployable)
+* still horizontally scalable behind a load balancer
+* later extraction is straightforward (modules become services) if you keep contracts stable.
+
+**Backend = API + Application + Domain + Infrastructure**
+
+* **Domain**: pure Python (no FastAPI, no SQLAlchemy, no Redis clients, no Pydantic).
+* **Application**: use cases + ports (interfaces) + DTO mapping rules.
+* **Infrastructure**: DB, cache, brokers, external providers, observability wiring.
+* **API**: FastAPI routes coordinate use cases only.
+
+### Backend framework choice
+
+**FastAPI** (API layer only) + **Uvicorn** (ASGI server)
+
+* FastAPI is mature, async-friendly, good OpenAPI support for multi-clients.
+* Keep it out of domain/application via strict layering.
+
+### Data stores
+
+**PostgreSQL** (system of record) + optional **event/outbox table** for integration
+
+* Relational integrity is critical for orders, payments, table state, idempotency.
+* Use **JSONB** sparingly (e.g., menu metadata), but core entities normalized.
+
+**Migrations**: Alembic.
+
+### Cache strategy (Redis)
+
+**Redis** used for:
+
+1. **Hot read caching**: menu, restaurant config, tax rates
+2. **Ephemeral state**: websocket connection registry, short-lived session tokens
+3. **Rate limiting** / throttling (API and kiosk/tablet)
+4. **Distributed locks** (rare; prefer DB row locks for domain invariants)
+
+**Cache policy**
+
+* cache-aside for reads with **explicit TTL**
+* never cache “truth” of order/payment state (that lives in Postgres)
+* invalidate by version keys (e.g., `menu:{restaurant_id}:v{menu_version}`)
+
+### Real-time updates approach
+
+**WebSockets** for dashboards + tablets (kitchen screen, table status, order status)
+
+* Bi-directional, lower latency, best for “kitchen is live” UX.
+* Add **SSE** later for web-only lightweight clients if needed.
+
+**Scale strategy**
+
+* WebSocket server is stateless, scale horizontally.
+* Use Redis pub/sub or Postgres NOTIFY or a broker. Day-1: **Redis pub/sub**.
+* Later: swap to **NATS** or **Kafka** if event volume or ordering guarantees demand it.
+
+### Observability stack (day-1 vs prod)
+
+**Day-1 (dev/test/local)**
+
+* Logs: **structured JSON to stdout** + `docker compose logs`
+* Metrics: **Prometheus** + **Grafana**
+* Traces: **OpenTelemetry SDK** + **Jaeger** (all-in-one)
+
+**Staging/prod upgrade path**
+
+* Logs: **OpenSearch** (or Elastic) + Fluent Bit + Kibana/OpenSearch Dashboards (ELK-like)
+* Metrics: Prometheus + Grafana stays
+* Traces: Jaeger → Tempo (Grafana) optional, or keep Jaeger if OK
+
+---
+
+## Clear system diagram (text)
+
+```
+                 +---------------------------+
+                 |   Internal AI Agents      |
+                 | (CI bots, schema checks,  |
+                 |  test gen, ops automation)|
+                 +-------------+-------------+
+                               |
+                               v
++-------------------+   HTTPS   +-------------------+     SQL     +--------------+
+| Tablet Ordering   |---------->|  Backend API      |-----------> | PostgreSQL    |
+| Android per-table |           |  (FastAPI)        |             | (system record)|
++-------------------+           |                   |             +--------------+
+                                |  Application      |
++-------------------+   HTTPS   |  Use Cases        |   Redis     +--------------+
+| Online Ordering   |---------->|  + Domain         |<----------> | Redis        |
+| Web (React)       |           |                   |             | (cache/pubsub)|
++-------------------+           +---------+---------+             +--------------+
+                                          |
+                                          | WS (events)
+                                          v
+                               +-------------------+
+                               | Admin + Kitchen   |
+                               | Dashboard (React) |
+                               +-------------------+
+
+Observability (sidecar-style):
+- JSON logs -> stdout -> (Fluent Bit) -> (OpenSearch/ELK in staging/prod)
+- OTEL traces -> Jaeger/Tempo
+- /metrics -> Prometheus -> Grafana
+```
+
+---
+
+## Repo structure (tree)
+
+Monorepo recommended (shared types, consistent tooling, single CI pipeline).
+
+```
+repo/
+  README.md
+  .editorconfig
+  .gitignore
+  docker-compose.yml
+  Makefile
+
+  infra/
+    k8s/
+      base/
+      overlays/
+        dev/
+        staging/
+        prod/
+    terraform/
+      modules/
+      envs/
+        dev/
+        staging/
+        prod/
+
+  backend/
+    pyproject.toml
+    uv.lock (or poetry.lock)
+    src/
+      rop/
+        api/
+          main.py
+          routes/
+            health.py
+            menu.py
+            tables.py
+            orders.py
+            payments.py
+          ws/
+            gateway.py
+            events.py
+          middleware/
+            request_id.py
+            auth.py
+            logging.py
+            tracing.py
+
+        application/
+          ports/
+            repositories.py
+            payment_provider.py
+            publisher.py
+            clock.py
+            id_generator.py
+          use_cases/
+            place_order.py
+            accept_order.py
+            mark_ready.py
+            capture_payment.py
+            close_table.py
+          dto/
+            requests.py
+            responses.py
+            events.py
+          mappers/
+            order_mapper.py
+
+        domain/
+          __init__.py
+          common/
+            errors.py
+            money.py
+            ids.py
+            time.py
+          menu/
+            entities.py
+            value_objects.py
+          table/
+            entities.py
+            policies.py
+          order/
+            entities.py
+            value_objects.py
+            services.py
+            events.py
+          payment/
+            entities.py
+            value_objects.py
+            services.py
+
+        infrastructure/
+          db/
+            session.py
+            models/
+              order.py
+              table.py
+              menu.py
+              payment.py
+            repositories/
+              order_repo.py
+              table_repo.py
+              menu_repo.py
+              payment_repo.py
+            migrations/
+              alembic.ini
+              versions/
+          cache/
+            redis_client.py
+            cache_store.py
+          messaging/
+            redis_pubsub.py
+            publisher.py
+          payments/
+            stripe_provider.py
+          observability/
+            logging_config.py
+            otel.py
+            metrics.py
+
+    tests/
+      unit/
+        domain/
+        application/
+      integration/
+        api/
+        db/
+      contract/
+        openapi_snapshot_test.py
+
+  frontend/
+    package.json
+    pnpm-lock.yaml
+    apps/
+      web-ordering/
+        src/
+          pages/
+          api/
+          components/
+      dashboard/
+        src/
+          pages/
+          api/
+          components/
+    packages/
+      ui/
+      shared-types/
+      api-client/
+
+  android/
+    tablet-ordering/
+      app/
+      build.gradle
+      src/
+
+  agents/
+    README.md
+    scripts/
+      verify_openapi.py
+      enforce_dependency_policy.py
+      generate_contract_tests.py
+    workflows/
+      release_notes_bot.md
+```
+
+---
+
+## Tech stack table
+
+| Area                | Choice                                              | Why                                                    |
+| ------------------- | --------------------------------------------------- | ------------------------------------------------------ |
+| API                 | FastAPI + Uvicorn                                   | Async-ready, strong OpenAPI; kept at edge only         |
+| Domain/Application  | Pure Python                                         | Maximum testability, zero framework coupling           |
+| ORM                 | SQLAlchemy 2.x                                      | Mature, performance, explicit control                  |
+| DB                  | PostgreSQL                                          | Correctness + transactions + constraints + idempotency |
+| Cache/PubSub        | Redis                                               | Simple distributed cache + websocket event fanout      |
+| Migrations          | Alembic                                             | Standard with SQLAlchemy                               |
+| Observability       | OpenTelemetry + Prometheus + Grafana + Jaeger (dev) | Full triangle: logs/metrics/traces                     |
+| Logging             | JSON to stdout                                      | Container-native; easy to ship to ELK/OpenSearch later |
+| Frontend            | React (Vite)                                        | Fast dev loop, modern ecosystem                        |
+| Dashboards realtime | WebSockets                                          | Kitchen/tablets need push + ack                        |
+| CI                  | GitHub Actions                                      | Common, composable pipelines                           |
+| Delivery            | Docker + K8s (later)                                | Containerized + horizontally scalable                  |
+
+---
+
+## Data flow: place order → kitchen → payment → close table
+
+### 1) Place order (tablet)
+
+1. Tablet calls `POST /v1/tables/{table_id}/orders`
+2. API maps request DTO → `PlaceOrder` use case
+3. Use case:
+
+   * loads Table + Menu snapshot
+   * validates availability/pricing rules
+   * creates `OrderPlaced` domain event
+   * persists order in Postgres
+   * publishes event (`publisher.port`) → Redis pub/sub
+4. WS gateway pushes `order.placed` to kitchen dashboard subscribers
+
+### 2) Kitchen accept + progress
+
+1. Kitchen dashboard subscribes `kitchen.{restaurant_id}`
+2. `POST /v1/orders/{order_id}/accept` (or WS command)
+3. Use case transitions state: `PLACED -> ACCEPTED`
+4. Publish `order.accepted`
+5. When ready: `POST /v1/orders/{order_id}/ready` → `order.ready`
+
+### 3) Payment
+
+1. Tablet/web calls `POST /v1/orders/{order_id}/payments:authorize` (optional)
+2. Then `POST /v1/orders/{order_id}/payments:capture`
+3. Use case ensures idempotency via payment intent key
+4. Persist payment + order state `READY -> PAID`
+5. Publish `payment.captured`
+
+### 4) Close table
+
+1. Tablet calls `POST /v1/tables/{table_id}/close`
+2. Use case verifies all active orders paid, settles tips, closes table
+3. Publish `table.closed`
+
+---
+
+## First 3 vertical slices (domain model → use case → API → tests → UI wiring)
+
+### Slice 1 — Menu read + caching (foundation)
+
+**Goal:** clients can read menu fast + versioned caching.
+
+Deliverables
+
+* Domain:
+
+  * `menu.entities.Menu`, `MenuItem`, `Price`, invariants (non-negative, availability rules)
+* Application:
+
+  * `GetMenu` use case (read-only)
+  * Ports: `MenuRepository`, `CacheStore`
+* API:
+
+  * `GET /v1/restaurants/{restaurant_id}/menu`
+  * ETag + `menu_version`
+* Tests:
+
+  * unit: menu invariants, mapping
+  * integration: repo + Redis cache behavior
+* UI:
+
+  * React web ordering pulls menu, renders items
+
+### Slice 2 — Place order + kitchen fanout (core value)
+
+**Goal:** place an order and see it appear in kitchen instantly.
+
+Deliverables
+
+* Domain:
+
+  * `order.entities.Order`, `OrderLine`
+  * domain events: `OrderPlaced`
+  * policies: table must be OPEN, items must be AVAILABLE
+* Application:
+
+  * `PlaceOrder` use case
+  * Ports: `OrderRepository`, `TableRepository`, `Publisher`
+* API:
+
+  * `POST /v1/tables/{table_id}/orders`
+  * `GET /v1/orders/{order_id}`
+* WebSocket:
+
+  * event `order.placed`
+* Tests:
+
+  * unit: invariants + event emission
+  * integration: API + DB + Redis pubsub publish
+* UI:
+
+  * Tablet: “place order”
+  * Kitchen dashboard: live queue updates via WS
+
+### Slice 3 — Capture payment + close table (revenue completion)
+
+**Goal:** capture payment and close table with correct state transitions.
+
+Deliverables
+
+* Domain:
+
+  * `payment.entities.Payment`, `PaymentStatus`
+  * transitions: `Order -> PAID`, `Table -> CLOSED`
+  * idempotency key rules
+* Application:
+
+  * `CapturePayment`, `CloseTable` use cases
+  * Ports: `PaymentProvider`, `PaymentRepository`, `OrderRepository`, `TableRepository`
+* API:
+
+  * `POST /v1/orders/{order_id}/payments:capture`
+  * `POST /v1/tables/{table_id}/close`
+* WebSocket:
+
+  * `payment.captured`, `table.closed`
+* Tests:
+
+  * contract tests for payment provider stub
+  * integration: idempotent capture, close table validations
+* UI:
+
+  * Tablet checkout flow + “close table”
+  * Dashboard updates automatically
+
+---
+
+## Service contracts: REST endpoints + WebSocket events
+
+### REST (v1)
+
+**Health**
+
+* `GET /health/live`
+* `GET /health/ready`
+* `GET /metrics`
+
+**Menu**
+
+* `GET /v1/restaurants/{restaurant_id}/menu`
+
+  * returns `{ menuVersion, categories, items... }`
+
+**Tables**
+
+* `GET /v1/tables/{table_id}`
+* `POST /v1/tables/{table_id}/open`
+* `POST /v1/tables/{table_id}/close`
+
+**Orders**
+
+* `POST /v1/tables/{table_id}/orders`
+* `GET /v1/orders/{order_id}`
+* `POST /v1/orders/{order_id}/accept`
+* `POST /v1/orders/{order_id}/ready`
+
+**Payments**
+
+* `POST /v1/orders/{order_id}/payments:capture`
+
+  * idempotency via header `Idempotency-Key`
+
+### WebSocket
+
+`GET /ws?restaurant_id=...&role=KITCHEN|TABLET|ADMIN`
+
+* Server pushes events; client may send commands (optional, later).
+
+**Event envelope (always)**
+
+```json
+{
+  "event_id": "uuid",
+  "event_type": "order.placed",
+  "occurred_at": "2026-02-15T22:10:00Z",
+  "trace_id": "....",
+  "restaurant_id": "rst_123",
+  "payload": { }
+}
+```
+
+**Events**
+
+* `order.placed` payload: `{ order_id, table_id, lines, notes, created_at }`
+* `order.accepted` payload: `{ order_id, accepted_by, accepted_at }`
+* `order.ready` payload: `{ order_id, ready_at }`
+* `payment.captured` payload: `{ order_id, payment_id, amount, captured_at }`
+* `table.closed` payload: `{ table_id, closed_at }`
+
+---
+
+## DTOs vs domain objects rules (dependency discipline)
+
+**Domain objects**
+
+* never serialized directly
+* no Pydantic
+* no ORM models
+* no datetime parsing from strings at this layer
+
+**DTOs (API/Application boundary)**
+
+* Pydantic models are allowed in `api/` and `application/dto/`
+* Mapping is explicit in `application/mappers/`
+* Domain uses its own `Money`, `OrderId`, etc.
+
+**ORM models**
+
+* only in `infrastructure/db/models`
+* repositories map ORM ↔ domain
+
+---
+
+## Operability
+
+### Health endpoints
+
+* **Liveness** `/health/live`
+
+  * returns 200 if process is up
+* **Readiness** `/health/ready`
+
+  * checks DB connectivity + migrations state (light) + Redis connectivity
+  * returns 503 if not ready (prevents bad traffic)
+
+### Structured logging schema (JSON)
+
+Every log line includes:
+
+* `timestamp` (RFC3339)
+* `level`
+* `service` (e.g., `rop-backend`)
+* `env` (dev/test/staging/prod)
+* `request_id`
+* `trace_id`, `span_id`
+* `user_id` (if authenticated), `table_id`, `order_id` when relevant
+* `event` (short stable name, e.g., `order_placed`)
+* `message` (human readable)
+* `attrs` (dict for extra)
+
+### Trace propagation
+
+* Incoming: accept `traceparent` header (W3C)
+* Outgoing:
+
+  * HTTP calls to payment provider propagate trace headers
+  * WS events include `trace_id` in envelope
+* Use OpenTelemetry middleware in API; use OTel spans inside use cases for key steps.
+
+### Key metrics
+
+Prometheus:
+
+* HTTP:
+
+  * request count/latency by route/status
+* Use case:
+
+  * `place_order_duration_seconds`
+  * `payment_capture_duration_seconds`
+  * `orders_placed_total`, `orders_ready_total`
+* Infra:
+
+  * DB pool saturation
+  * Redis command latency
+* Business:
+
+  * average ticket size
+  * time from placed → accepted → ready
+
+---
+
+## CI/CD outline (GitHub Actions example)
+
+Pipeline stages:
+
+1. **Lint/format**
+
+   * Python: ruff (lint + format)
+   * Frontend: eslint + prettier
+2. **Typecheck**
+
+   * Python: mypy (application + infra + api; domain is strict)
+   * TS: tsc
+3. **Tests**
+
+   * Unit tests (fast)
+   * Integration tests (DB + Redis via service containers)
+   * Contract: OpenAPI snapshot + backward-compat checks
+4. **Build**
+
+   * Docker build (backend + frontend)
+   * Tag: `git_sha`, `semver`, `branch`
+   * Push to registry
+5. **Deploy to staging**
+
+   * apply manifests/helm/kustomize
+   * run smoke tests: health + one order flow
+
+---
+
+## Local dev workflow commands (“one command up”, hot reload, seed, tests)
+
+### One command up
+
+```bash
+make up
+```
+
+Brings up:
+
+* postgres
+* redis
+* jaeger
+* prometheus
+* grafana
+* backend (hot reload)
+* web apps (Vite)
+
+### Seed data
+
+```bash
+make seed
+```
+
+### Run tests
+
+```bash
+make test
+make test-integration
+```
+
+### Hot reload
+
+* Backend: `uvicorn ... --reload`
+* Frontend: `vite`
+
+### Suggested Makefile targets
+
+* `make up`, `make down`, `make logs`
+* `make migrate`, `make seed`
+* `make lint`, `make typecheck`, `make test`
+* `make build`
+
+---
+
+## Dependencies: small, rational set + policy
+
+### Allowed libraries (backend)
+
+* API: `fastapi`, `uvicorn`
+* DTO: `pydantic`
+* DB: `sqlalchemy`, `psycopg` (or asyncpg if fully async DB)
+* Migrations: `alembic`
+* Cache: `redis`
+* Observability: `opentelemetry-*`, `prometheus-client`
+* Testing: `pytest`, `pytest-asyncio`, `httpx`, `testcontainers` (or docker-compose services)
+
+### Dependency policy (hard rules)
+
+* `domain/`
+
+  * ✅ standard library only
+  * ✅ `typing`, `dataclasses`
+  * ❌ no FastAPI, no Pydantic, no SQLAlchemy, no Redis, no requests/httpx
+* `application/`
+
+  * ✅ standard library + typing
+  * ✅ DTOs allowed but only as **plain dataclasses** or minimal models
+  * ✅ ports are pure interfaces
+  * ❌ no infrastructure clients
+* `infrastructure/`
+
+  * ✅ all external integrations live here
+* `api/`
+
+  * ✅ FastAPI/Pydantic + request lifecycle concerns only
+  * ❌ no business logic beyond orchestration
+
+Enforcement:
+
+* `agents/scripts/enforce_dependency_policy.py` scans imports and fails CI.
+
+---
+
+## Decisions & tradeoffs
+
+1. **Modular monolith first**
+
+* ✅ fastest path to production while keeping boundaries
+* ✅ simpler ops day-1
+* ❌ requires discipline to avoid “big ball of mud”
+* Mitigation: ports/adapters, dependency enforcement, module boundaries, contract tests.
+
+2. **Postgres as single source of truth**
+
+* ✅ transactions, correctness, idempotency, state transitions
+* ❌ must design indexes and manage migrations carefully
+* Mitigation: strict migration workflow + integration tests.
+
+3. **Redis for cache + pubsub**
+
+* ✅ simple, widely supported
+* ❌ pubsub is “best effort” (not durable)
+* Mitigation: for critical events, persist to DB + optionally outbox; later move to NATS/Kafka.
+
+4. **WebSockets**
+
+* ✅ best UX for kitchen/tablet
+* ❌ requires connection management + scale considerations
+* Mitigation: stateless servers, Redis pubsub fanout, sticky sessions optional but avoidable.
+
+5. **Observability day-1 (Prom/Grafana/Jaeger)**
+
+* ✅ strong visibility early
+* ❌ extra moving parts locally
+* Mitigation: compose profiles; prod can switch to managed services.
+
+<<'CODEX'
+ROP-001 v1.0 [CODEX] Bootstrap repo foundation (backend skeleton + dependency policy + local dev stack)
+
+Context
+System: Restaurant Operating Platform
+Slice: Foundation for Slice 1 (Menu read + caching), but this story only builds the base repo + backend shell + operability hooks.
+Architecture rules: domain-first, clean boundaries, dependency disciplined.
+
+Goal
+Create a monorepo baseline that can run locally with one command and enforces the layering policy.
+Implement a minimal FastAPI app with health endpoints, metrics endpoint, and OpenTelemetry wiring (dev defaults).
+Add Docker Compose for postgres/redis/jaeger/prometheus/grafana.
+Add Makefile targets for up/down/lint/typecheck/test/migrate/seed.
+Add a dependency policy checker that fails CI if domain imports forbidden libs.
+
+Non-negotiables
+Domain purity:
+- backend/src/rop/domain MUST NOT import: fastapi, pydantic, sqlalchemy, redis, httpx/requests, opentelemetry, prometheus_client, any infrastructure package.
+API thinness:
+- backend/src/rop/api routes orchestrate only (call application use cases), no business logic.
+Infrastructure swappable:
+- repositories/providers are behind ports in backend/src/rop/application/ports.
+Observability:
+- structured JSON logs to stdout with request_id + trace_id.
+- /metrics for Prometheus.
+- trace propagation via W3C traceparent.
+Containerized:
+- docker-compose brings up all dependencies.
+
+Acceptance criteria
+- One command starts the stack: make up
+- Backend serves:
+  - GET http://localhost:8000/health/live -> 200 {"status":"ok"}
+  - GET http://localhost:8000/health/ready -> 200 when postgres+redis reachable, else 503
+  - GET http://localhost:8000/metrics -> 200 text/plain
+- Lint/typecheck/tests pass:
+  - make lint
+  - make typecheck
+  - make test
+- Dependency policy enforced:
+  - make depcheck fails if domain imports forbidden libs
+- Docker Compose includes postgres, redis, jaeger, prometheus, grafana, backend
+- Minimal docs exist: README with exact commands
+
+Implementation plan (follow strictly)
+1) Create repo files and directories exactly as listed below.
+2) Implement backend with strict layering and minimal dependencies.
+3) Add structured logging + request_id middleware + OTel tracing middleware.
+4) Add Prometheus metrics endpoint.
+5) Add dependency policy checker script + Makefile target.
+6) Add unit tests for health endpoints and dependency policy script behavior.
+7) Ensure “make up” works and app hot reloads.
+
+Files to create/modify
+
+repo/README.md
+- Explain architecture layers (Domain/Application/Infrastructure/API).
+- Show local workflow: make up, make down, make lint, make typecheck, make test, make depcheck.
+- Document health/metrics endpoints and where to see traces/metrics:
+  - Jaeger at http://localhost:16686
+  - Prometheus at http://localhost:9090
+  - Grafana at http://localhost:3000 (admin/admin)
+
+repo/AGENTS.md
+- Codex guidance:
+  - Do not violate dependency policy.
+  - Always run make lint/typecheck/test after changes.
+  - Prefer minimal files and small diffs.
+  - Do not add libraries unless explicitly asked.
+
+repo/.editorconfig
+repo/.gitignore
+
+repo/Makefile
+Targets:
+- up: docker compose up -d --build
+- down: docker compose down -v
+- logs: docker compose logs -f --tail=200
+- lint: ruff check backend && ruff format --check backend
+- fmt: ruff format backend
+- typecheck: mypy backend
+- test: pytest -q backend/tests/unit
+- test-integration: pytest -q backend/tests/integration
+- depcheck: python backend/tools/depcheck.py
+- migrate: docker compose exec backend alembic upgrade head
+- seed: docker compose exec backend python -m rop.tools.seed
+
+repo/docker-compose.yml
+Services:
+- postgres: image postgres:16, port 5432, env POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB
+- redis: image redis:7, port 6379
+- jaeger: jaegertracing/all-in-one, ports 16686 (ui), 4317 (otlp grpc), 4318 (otlp http)
+- prometheus: prom/prometheus, port 9090, mount ./infra/observability/prometheus.yml
+- grafana: grafana/grafana, port 3000
+- backend:
+  - build ./backend
+  - ports 8000:8000
+  - env: APP_ENV=dev, DATABASE_URL, REDIS_URL, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME
+  - depends_on: postgres, redis, jaeger
+  - command: uvicorn rop.api.main:app --host 0.0.0.0 --port 8000 --reload
+  - mount backend/src to container for hot reload
+
+repo/infra/observability/prometheus.yml
+- scrape backend /metrics on port 8000
+
+backend/pyproject.toml
+Use uv (preferred) OR poetry; choose one and be consistent. Keep deps minimal.
+Required runtime deps:
+- fastapi
+- uvicorn[standard]
+- pydantic (only for DTOs / API models)
+- sqlalchemy
+- psycopg[binary]
+- alembic
+- redis
+- opentelemetry-api
+- opentelemetry-sdk
+- opentelemetry-exporter-otlp
+- opentelemetry-instrumentation-fastapi
+- prometheus-client
+Dev deps:
+- pytest
+- pytest-asyncio
+- httpx
+- ruff
+- mypy
+- types-redis
+- types-requests (only if needed; prefer not)
+
+backend/Dockerfile
+- multi-stage optional but keep it simple
+- install deps
+- copy src
+- set PYTHONPATH=/app/src
+- run uvicorn command via compose
+
+backend/src/rop/__init__.py
+
+backend/src/rop/api/main.py
+- create FastAPI app
+- include routers: health, metrics
+- add middleware: request_id, logging, tracing
+- set up JSON logging
+
+backend/src/rop/api/routes/health.py
+- /health/live
+- /health/ready (checks postgres and redis with short timeouts)
+
+backend/src/rop/api/routes/metrics.py
+- /metrics exposes prometheus_client generate_latest
+
+backend/src/rop/api/middleware/request_id.py
+- if X-Request-Id present use it, else generate UUID4
+- attach to response header X-Request-Id
+- store in contextvar for logging
+
+backend/src/rop/infrastructure/observability/logging_config.py
+- JSON formatter
+- include request_id, trace_id, span_id in every log record when available
+
+backend/src/rop/infrastructure/observability/otel.py
+- configure OpenTelemetry SDK
+- OTLP exporter endpoint from env
+- instrument FastAPI
+- ensure W3C propagation enabled
+
+backend/src/rop/infrastructure/db/session.py
+- create SQLAlchemy engine from DATABASE_URL
+- provide a lightweight “ping” function for readiness (SELECT 1)
+
+backend/src/rop/infrastructure/cache/redis_client.py
+- create redis client from REDIS_URL
+- provide a lightweight “ping” function for readiness
+
+backend/src/rop/application/__init__.py
+backend/src/rop/domain/__init__.py
+- keep empty for now; used to enforce policy
+
+backend/tools/depcheck.py
+- scan python files under backend/src/rop/domain
+- fail if forbidden imports present
+- forbidden modules list includes:
+  fastapi, pydantic, sqlalchemy, redis, httpx, requests, opentelemetry, prometheus_client, rop.api, rop.infrastructure
+- exit non-zero with clear error message showing file and import
+
+backend/src/rop/tools/seed.py
+- placeholder seed script (no domain yet)
+- should connect to DB and insert minimal row(s) only if tables exist; otherwise print “no schema yet”
+
+backend/tests/unit/test_health.py
+- use fastapi TestClient
+- assert /health/live 200 and JSON payload
+- for /health/ready: if env vars not set in test, mock readiness checks to return healthy
+
+backend/tests/unit/test_depcheck.py
+- create a temp file under a temp domain folder and run depcheck on it (or refactor depcheck to accept paths)
+- assert it fails when forbidden import is present
+
+Constraints
+- No random scaffolding. Only create the listed files.
+- Keep code small and clean.
+- Ensure the backend can run in docker-compose with hot reload.
+
+Commands to verify (ensure these pass)
+cd repo
+make up
+curl -s http://localhost:8000/health/live
+curl -s http://localhost:8000/health/ready
+curl -s http://localhost:8000/metrics | head
+make lint
+make typecheck
+make test
+make depcheck
+
+Deliverable summary
+- Working local stack with observability services
+- Minimal backend shell with health + metrics + tracing + JSON logging
+- Enforced dependency discipline for domain layer
+CODEX>>
+
+
+ <<'CODEX'
+ROP-002 v1.0 [CODEX] Slice 1 — Menu read API + Postgres persistence + Redis cache-aside (versioned) + UI wiring
+
+Context
+We have repo foundation from ROP-001: FastAPI app, health/metrics/otel/logging, postgres+redis via docker-compose, dependency policy for domain.
+Now implement the first vertical slice: Menu read with versioned caching. This is a READ path only (no admin editing yet).
+Clients: web ordering + tablet + dashboard will call GET menu.
+
+Goal
+Implement a production-grade Menu module:
+- Domain model for Menu and MenuItem with invariants (pure Python)
+- Postgres storage for menu (minimal schema) with repository adapter
+- Cache-aside Redis strategy with versioned keys
+- Application use case GetMenu
+- API endpoint GET /v1/restaurants/{restaurant_id}/menu with ETag + menu_version
+- Unit + integration tests
+- Minimal React wiring to fetch and render menu in web-ordering app (stub UI is fine)
+
+Non-negotiables
+- Domain stays pure: no FastAPI, no Pydantic, no SQLAlchemy, no Redis.
+- Use cases orchestrate ports; API only calls use case and maps DTOs.
+- Cache is best-effort; Postgres is source of truth.
+- Cache key must be versioned; avoid invalidation complexity by using menu_version.
+- Keep dependencies minimal; do not add new libraries unless absolutely required.
+
+Acceptance criteria
+Backend
+- DB migration exists and runs: make migrate
+- Seed creates one restaurant + one menu with items: make seed
+- Endpoint works:
+  - GET /v1/restaurants/{restaurant_id}/menu returns 200 with menuVersion and items
+  - Response includes ETag header computed from menuVersion (or stable hash)
+  - If client sends If-None-Match with same ETag -> 304 Not Modified
+- Redis caching:
+  - First request (cold) hits DB and populates Redis
+  - Subsequent request (warm) hits Redis and does NOT query DB (verified in integration test with spy/metric/log)
+- Tests:
+  - make test passes (unit)
+  - make test-integration passes (integration hitting real postgres+redis via compose)
+Frontend
+- web-ordering app page fetches menu and renders items list (minimal)
+- Uses shared API base URL env var VITE_API_BASE_URL
+- Works with docker compose (or pnpm dev) without extra manual steps
+
+Files to create/modify
+
+Backend domain (pure)
+- backend/src/rop/domain/menu/entities.py
+  - dataclasses:
+    - Menu(menu_id, restaurant_id, version, categories, items, updated_at)
+    - MenuItem(item_id, name, description?, price_money, is_available, category_id?)
+  - invariants:
+    - version >= 1
+    - price >= 0
+    - name non-empty
+- backend/src/rop/domain/common/money.py
+  - Money(amount_cents:int, currency:str)
+  - invariants: amount_cents >= 0, currency is 3-letter uppercase
+- backend/src/rop/domain/common/ids.py
+  - typed IDs as NewType or small wrappers (RestaurantId, MenuId, MenuItemId)
+
+Application layer
+- backend/src/rop/application/ports/repositories.py
+  - MenuRepository protocol:
+    - get_menu_by_restaurant_id(restaurant_id) -> Menu | None
+- backend/src/rop/application/ports/cache.py
+  - CacheStore protocol:
+    - get(key)->str|None
+    - set(key,value,ttl_seconds)->None
+- backend/src/rop/application/dto/responses.py
+  - Pydantic model MenuResponse, MenuItemResponse (DTOs only; do not reuse domain objects)
+- backend/src/rop/application/use_cases/get_menu.py
+  - GetMenu use case:
+    - input: restaurant_id
+    - steps:
+      1) compute cache keys: menu:{restaurant_id}:v{version} is not known yet, so first fetch menu_version key:
+         - key: menu:{restaurant_id}:version -> int
+      2) if version in cache:
+         - get menu payload key: menu:{restaurant_id}:v{version}
+         - return decoded DTO
+      3) else load from repo (DB):
+         - if None -> raise NotFound (application error)
+         - store version key + payload key in Redis with TTL (suggest 300s)
+         - return DTO
+  - Mapping:
+    - domain -> DTO mapping in application/mappers/menu_mapper.py
+
+Infrastructure
+- backend/src/rop/infrastructure/db/models/menu.py
+  - SQLAlchemy models:
+    - restaurants (id, name)
+    - menus (id, restaurant_id, version, updated_at)
+    - menu_items (id, menu_id, name, description, price_cents, currency, is_available)
+  - keep schema minimal
+- backend/src/rop/infrastructure/db/repositories/menu_repo.py
+  - implements MenuRepository
+  - loads menu + items in one query (joined/selectinload)
+- backend/src/rop/infrastructure/db/migrations/versions/<timestamp>_create_menu_tables.py
+  - Alembic migration for above tables
+- backend/src/rop/infrastructure/cache/cache_store.py
+  - implements CacheStore using existing redis_client
+  - values are strings (JSON). Provide get/set with TTL.
+
+API
+- backend/src/rop/api/routes/menu.py
+  - GET /v1/restaurants/{restaurant_id}/menu
+  - If-None-Match support:
+    - compute ETag: "menu-v{menuVersion}"
+    - if header matches -> return 304
+  - else return MenuResponse
+- backend/src/rop/api/main.py
+  - include menu router
+- backend/src/rop/api/routes/__init__.py (if needed)
+
+Seed
+- backend/src/rop/tools/seed.py
+  - add seed that:
+    - inserts restaurant rst_001
+    - inserts menu men_001 version 1
+    - inserts 3-5 menu items
+  - safe to re-run (upsert/ignore duplicates)
+
+Tests
+Unit
+- backend/tests/unit/menu/test_domain_menu.py
+  - invariants for Money, MenuItem, Menu
+- backend/tests/unit/menu/test_get_menu_use_case.py
+  - uses fake repo + fake cache store; verifies cache-aside behavior
+Integration
+- backend/tests/integration/test_menu_endpoint.py
+  - requires services up (postgres/redis)
+  - migrates DB (or assumes make migrate ran; prefer test fixture to run alembic)
+  - runs seed
+  - calls endpoint twice; second time assert it served from cache (use a repo spy or log assertion; simplest: monkeypatch repo method to raise on second call and still succeed via cache)
+  - assert ETag + 304 path works
+
+Frontend (minimal wiring)
+- frontend/apps/web-ordering/src/pages/MenuPage.tsx
+  - fetch from `${VITE_API_BASE_URL}/v1/restaurants/rst_001/menu`
+  - render list of items with name + price
+- frontend/apps/web-ordering/src/main.tsx (or router) to show MenuPage
+- frontend/apps/web-ordering/.env.example with VITE_API_BASE_URL=http://localhost:8000
+
+Commands to verify
+Backend
+cd repo
+make up
+make migrate
+make seed
+curl -i http://localhost:8000/v1/restaurants/rst_001/menu
+curl -i -H 'If-None-Match: "menu-v1"' http://localhost:8000/v1/restaurants/rst_001/menu
+make test
+make test-integration
+make depcheck
+
+Frontend
+cd repo/frontend
+pnpm i
+pnpm --filter web-ordering dev
+
+Implementation notes (important)
+- Domain objects must not leak to API responses. Always map to DTOs.
+- Cache store values are JSON; define a stable JSON structure in DTO and serialize/deserialize in application layer.
+- For ETag: use menuVersion only for now. When admin editing is added, version increments on every change.
+- Restaurant/menu IDs can be strings for now (rst_001 etc) but keep typed IDs in domain via NewType wrappers.
+
+Deliverable summary
+- Menu slice read path implemented with disciplined layering
+- Postgres migration + seed
+- Redis cache-aside with versioned keys
+- Minimal React menu page wired to API
+CODEX>>
+
+
+ <<'CODEX'
+ROP-003 v1.0 [CODEX] Slice 2 — Table lifecycle + Place Order + Redis event publish + WebSocket fanout + Kitchen dashboard (minimal)
+
+Context
+We reviewed https://github.com/Vivek-k24/foodbiz.git and the repo already contains:
+- ROP-001 foundation (docker-compose, health/metrics/otel/logging, depcheck)
+- ROP-002 menu read slice (domain/menu, GetMenu use case, /v1/restaurants/{restaurant_id}/menu, DB repo, Redis cache)
+
+Now we implement Slice 2: place order and push it in real-time to a kitchen dashboard.
+We will keep the same layering and minimalism already present in the codebase.
+
+Goal
+Backend:
+- Add Table + Order bounded modules (domain + application + infrastructure + API)
+- Implement table OPEN/CLOSED state and “place order” use case
+- Persist tables/orders/order_lines in Postgres (Alembic migration)
+- Publish OrderPlaced events to Redis pubsub channel per restaurant
+- Add WebSocket endpoint that fans out Redis events to connected dashboard/tablet clients (stateless + horizontally scalable-ready)
+
+Frontend:
+- Add a new React app `frontend/apps/dashboard` (kitchen/admin dashboard minimal)
+- Connect to backend WebSocket and render live order queue (minimal UI is fine)
+
+Non-negotiables
+- Domain remains pure: no FastAPI, Pydantic, SQLAlchemy, Redis, OTel, Prometheus in `backend/src/rop/domain/**`.
+- API routes orchestrate only: validate request DTO, call use case, map response; no business rules in routes.
+- Infrastructure swappable via ports: repositories and publisher behind protocols.
+- Postgres is source of truth; Redis is best-effort for events (pubsub) and transient coordination only.
+- Event envelope is stable and includes trace_id + request_id when available.
+
+Acceptance criteria
+Backend
+- `make migrate` applies new tables for tables/orders/order_lines
+- `make seed` creates:
+  - restaurant rst_001 (if not already)
+  - menu v1 with items (existing behavior)
+  - table tbl_001 in OPEN state for restaurant rst_001
+- Endpoints work:
+  - POST /v1/restaurants/rst_001/tables/tbl_001/open -> 200 (idempotent if already open)
+  - POST /v1/restaurants/rst_001/tables/tbl_001/orders -> 201 with order payload
+  - GET /v1/orders/{order_id} -> 200
+- Order placement validations:
+  - table must be OPEN
+  - menu item must exist and be available
+  - quantity must be >= 1
+  - price snapshot taken from menu at time of order
+- Redis publish:
+  - placing an order publishes exactly one message to channel `events:rst_001`
+  - message is JSON event envelope with `event_type="order.placed"`
+- WebSocket:
+  - GET /ws?restaurant_id=rst_001&role=KITCHEN accepts connection
+  - when order is placed, connected WS client receives `order.placed` event within 2s
+- Tests:
+  - unit tests for domain invariants + use case happy-path + failure cases
+  - integration tests for:
+    - place order persists to DB
+    - redis pubsub receives `order.placed`
+    - websocket receives broadcast for `order.placed`
+Frontend
+- `pnpm --filter dashboard dev` runs
+- dashboard shows live incoming orders for rst_001 via WS
+
+Implementation plan (follow strictly)
+1) Extend domain IDs and add domain/table + domain/order models with invariants.
+2) Add application ports for TableRepository, OrderRepository, MenuRepository (reuse), and EventPublisher.
+3) Implement PlaceOrder use case: load table + menu, validate, create order, persist, publish event.
+4) Add SQLAlchemy models + repositories + migration.
+5) Add Redis publisher adapter.
+6) Add WS connection manager + Redis pubsub listener task that broadcasts messages by restaurant_id.
+7) Add API routes for table open + place order + order read + ws endpoint.
+8) Update seed.
+9) Add tests (unit + integration).
+10) Add frontend dashboard app.
+
+Files to create/modify
+
+1) Domain
+
+backend/src/rop/domain/common/ids.py
+- add:
+  - TableId = NewType("TableId", str)
+  - OrderId = NewType("OrderId", str)
+  - OrderLineId = NewType("OrderLineId", str)
+
+backend/src/rop/domain/table/entities.py
+- dataclasses:
+  - Table(table_id: TableId, restaurant_id: RestaurantId, status: TableStatus, opened_at: datetime|None, closed_at: datetime|None)
+  - TableStatus enum-like (use Literal or Enum from stdlib only)
+- invariants:
+  - if status == OPEN => opened_at not None
+  - if status == CLOSED => closed_at not None (or at least set when closing; keep minimal for now)
+- methods (pure):
+  - open(now) -> Table (returns new instance or raises)
+  - ensure_open() -> None (raises if not open)
+
+backend/src/rop/domain/order/entities.py
+- dataclasses:
+  - OrderLine(line_id: OrderLineId, item_id: MenuItemId, name: str, quantity: int, unit_price: Money, line_total: Money, notes: str|None)
+  - Order(order_id: OrderId, restaurant_id: RestaurantId, table_id: TableId, status: OrderStatus, lines: list[OrderLine], total: Money, created_at: datetime)
+  - OrderStatus: PLACED only for now (string/Enum)
+- invariants:
+  - at least 1 line
+  - quantity >= 1
+  - totals match sum(line_total)
+- factory function:
+  - create_placed_order(order_id, restaurant_id, table_id, lines, now) -> Order
+
+backend/src/rop/domain/order/events.py
+- dataclass OrderPlaced(order_id, restaurant_id, table_id, total: Money, created_at)
+- Domain event is pure data only (no JSON, no tracing)
+
+2) Application
+
+backend/src/rop/application/ports/repositories.py
+- keep existing MenuRepository
+- add protocols:
+  - TableRepository:
+      - get(table_id: TableId, restaurant_id: RestaurantId) -> Table|None
+      - upsert(table: Table) -> None   (for open idempotency)
+  - OrderRepository:
+      - add(order: Order) -> None
+      - get(order_id: OrderId) -> Order|None
+
+backend/src/rop/application/ports/publisher.py
+- protocol EventPublisher:
+  - publish(channel: str, message: str) -> None   (message is JSON string)
+
+backend/src/rop/application/dto/requests.py
+- Pydantic models:
+  - PlaceOrderLineRequest { itemId: str, quantity: int, notes?: str|null }
+  - PlaceOrderRequest { lines: PlaceOrderLineRequest[], note?: str|null }
+- keep snake_case internal, but API uses camelCase in JSON (configure alias_generator)
+
+backend/src/rop/application/dto/responses.py
+- add:
+  - OrderLineResponse
+  - OrderResponse
+  - TableResponse
+  - (reuse MoneyResponse)
+- responses in camelCase
+
+backend/src/rop/application/mappers/order_mapper.py
+- domain Order -> OrderResponse
+
+backend/src/rop/application/mappers/table_mapper.py
+- domain Table -> TableResponse
+
+backend/src/rop/application/mappers/events.py
+- map domain OrderPlaced -> event envelope JSON dict:
+  envelope fields:
+    - event_id (uuid4)
+    - event_type "order.placed"
+    - occurred_at (utc iso)
+    - trace_id (string or null)
+    - request_id (string or null)
+    - restaurant_id
+    - payload { orderId, tableId, totalMoney, createdAt, lines[] }
+- serialization:
+  - return json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
+
+backend/src/rop/application/use_cases/place_order.py
+- errors:
+  - TableNotOpenError
+  - MenuItemUnavailableError
+  - MenuNotFoundError (reuse existing or new)
+- execute(restaurant_id, table_id, request_dto, trace_ctx) -> OrderResponse
+- steps:
+  1) load table via repo; if missing -> 404
+  2) ensure table is OPEN; else -> 409
+  3) load menu via MenuRepository; validate items exist and is_available
+  4) create Order + OrderPlaced event
+  5) persist Order via OrderRepository (transaction in infra repo)
+  6) publish event JSON to channel `events:{restaurant_id}`
+  7) return OrderResponse
+
+3) Infrastructure (DB + Redis)
+
+backend/src/rop/infrastructure/db/models/table.py
+backend/src/rop/infrastructure/db/models/order.py
+- SQLAlchemy models:
+  - restaurants (already exists in menu migration; if not, create in this migration and reconcile)
+  - tables: id (pk), restaurant_id (fk), status, opened_at, closed_at
+  - orders: id (pk), restaurant_id (fk), table_id (fk), status, created_at, total_cents, currency
+  - order_lines: id (pk), order_id (fk), item_id, name, quantity, unit_price_cents, currency, line_total_cents, notes
+- indexes:
+  - orders(restaurant_id, created_at desc)
+  - orders(table_id, created_at desc)
+
+backend/src/rop/infrastructure/db/repositories/table_repo.py
+- implements TableRepository
+- get + upsert (idempotent open)
+- map ORM <-> domain
+
+backend/src/rop/infrastructure/db/repositories/order_repo.py
+- implements OrderRepository
+- add(Order) persists order + lines in one transaction
+- get(OrderId) loads order + lines and maps to domain
+
+backend/src/rop/infrastructure/db/migrations/versions/<timestamp>_create_tables_and_orders.py
+- Alembic migration for tables/orders/order_lines
+- Ensure compatibility with existing menu tables. Do NOT break existing menu migration.
+
+backend/src/rop/infrastructure/messaging/redis_publisher.py
+- implements EventPublisher
+- uses redis client (sync is OK because route handlers are sync currently; keep consistent)
+- publish(channel, message) -> redis.publish(channel, message)
+
+backend/src/rop/infrastructure/messaging/redis_event_listener.py
+- async Redis pubsub listener using redis.asyncio
+- function `start_redis_fanout(app_state)` that:
+  - subscribes to pattern `events:*`
+  - on each message, calls WS manager broadcast with restaurant_id parsed from channel
+- robust:
+  - reconnect loop with backoff (small)
+  - logs failures with structured fields
+
+4) API (HTTP + WS)
+
+backend/src/rop/api/routes/tables.py
+- POST /v1/restaurants/{restaurant_id}/tables/{table_id}/open
+  - creates/opens table idempotently (OPEN if not exists)
+  - returns TableResponse
+- GET /v1/restaurants/{restaurant_id}/tables/{table_id}
+  - returns TableResponse
+
+backend/src/rop/api/routes/orders.py
+- POST /v1/restaurants/{restaurant_id}/tables/{table_id}/orders
+  - request body PlaceOrderRequest
+  - returns 201 OrderResponse
+- GET /v1/orders/{order_id}
+  - returns OrderResponse
+
+backend/src/rop/api/ws/manager.py
+- ConnectionManager:
+  - register(ws, restaurant_id, role)
+  - unregister(ws)
+  - broadcast(restaurant_id, message_json_str)
+- store connections in-memory:
+  dict[restaurant_id] -> set[WebSocket]
+- include basic logging
+
+backend/src/rop/api/ws/routes.py
+- websocket endpoint: /ws
+- query params: restaurant_id, role
+- accept connection, register, keep alive (receive loop)
+- server does not require client messages day-1
+
+backend/src/rop/api/main.py
+- include new routers: tables, orders, ws routes
+- add FastAPI startup hook (or lifespan) to start redis event listener task:
+  - create background task on startup
+  - cancel on shutdown cleanly
+
+5) Seed updates
+
+backend/src/rop/tools/seed.py
+- ensure restaurant rst_001 exists
+- ensure menu exists (current)
+- ensure table tbl_001 exists and is OPEN with opened_at set
+- make it safe to re-run (upsert/ignore duplicates)
+
+6) Tests
+
+Unit
+backend/tests/unit/table/test_table_domain.py
+backend/tests/unit/order/test_order_domain.py
+backend/tests/unit/order/test_place_order_use_case.py
+- fakes for repositories + publisher
+- verify:
+  - rejects closed table
+  - rejects unavailable item
+  - calculates totals correctly
+  - publishes event once on success
+
+Integration (requires docker compose services)
+backend/tests/integration/test_place_order_publishes_redis_event.py
+- subscribe to redis channel `events:rst_001` (async pubsub)
+- call POST place order
+- assert received one message with event_type order.placed and correct orderId/tableId
+
+backend/tests/integration/test_websocket_receives_order_placed.py
+- use `websockets` python package ONLY IF ALREADY AVAILABLE; if not, add minimal dependency `websockets>=12` as dev-only.
+  - connect ws://localhost:8000/ws?restaurant_id=rst_001&role=KITCHEN
+  - place order via HTTP
+  - assert ws receives message containing `"event_type":"order.placed"`
+- If adding `websockets` dev dependency, update backend/pyproject.toml dev deps accordingly.
+
+7) Frontend dashboard app
+
+frontend/apps/dashboard/package.json
+- Vite + React + TS (same style as web-ordering)
+frontend/apps/dashboard/index.html
+frontend/apps/dashboard/vite.config.ts
+frontend/apps/dashboard/tsconfig.json
+frontend/apps/dashboard/src/main.tsx
+frontend/apps/dashboard/src/App.tsx
+frontend/apps/dashboard/src/env.d.ts
+frontend/apps/dashboard/.env.example
+- env:
+  - VITE_API_BASE_URL=http://localhost:8000
+  - VITE_WS_BASE_URL=ws://localhost:8000
+- App behavior:
+  - connect WS `${VITE_WS_BASE_URL}/ws?restaurant_id=rst_001&role=KITCHEN`
+  - render list of incoming orders (orderId, tableId, total)
+  - minimal styling, no component libraries
+
+frontend/package.json
+- add script:
+  - "dev:dashboard": "pnpm --filter dashboard dev"
+- keep existing scripts
+
+Commands to verify
+
+Backend
+cd repo
+make up
+make migrate
+make seed
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/open
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"lines":[{"itemId":"itm_001","quantity":1}]}'
+make test
+make test-integration
+make depcheck
+
+Frontend
+cd repo/frontend
+pnpm i
+pnpm --filter dashboard dev
+
+Implementation notes (important)
+- Keep routes thin; wire dependencies in a small composition function per route module (acceptable), but do not embed business logic.
+- Use request_id middleware + OTel: include request_id + trace_id in event envelope if available.
+- Do not introduce a message broker beyond Redis in this story.
+- Keep IDs as strings (rst_001, tbl_001) but typed in domain via NewType wrappers.
+
+Deliverable summary
+- Table + Order slice implemented end-to-end
+- Real-time kitchen updates via Redis pubsub -> WebSocket fanout
+- Minimal dashboard app that shows live orders
+CODEX>>
+
+
+<<'CODEX'
+ROP-003 v1.1 [CODEX] README runbook update (parallel terminals + verification checklist)
+
+Instruction
+Update repo/README.md with an explicit “Run & Verify (ROP-003)” section that:
+- Specifies when the user must open multiple terminals and what each terminal runs in parallel.
+- Provides a copy/paste verification checklist for HTTP + WebSocket + dashboard.
+
+Required README content (add exactly this structure)
+
+Run & Verify (ROP-003)
+Prereqs:
+- docker + docker compose installed
+- pnpm installed (or npm/yarn if project uses them)
+
+Terminal 1 — Infrastructure + Backend
+cd repo
+make up
+make migrate
+make seed
+Explain:
+- `make up` starts postgres/redis/jaeger/prometheus/grafana AND the backend container (uvicorn --reload)
+- Backend should be reachable at http://localhost:8000
+Verify (copy/paste):
+curl -s http://localhost:8000/health/live
+curl -s http://localhost:8000/health/ready
+curl -s http://localhost:8000/metrics | head
+
+Terminal 2 — Kitchen Dashboard (Frontend)
+Open a new terminal window/tab and run in parallel:
+cd repo/frontend
+pnpm i
+pnpm --filter dashboard dev
+Explain:
+- Dashboard dev server URL (Vite prints it; typically http://localhost:5173)
+- Ensure .env is set:
+  - VITE_API_BASE_URL=http://localhost:8000
+  - VITE_WS_BASE_URL=ws://localhost:8000
+
+Verification — Place Order → Dashboard receives realtime event
+Option A (HTTP only quick check):
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/open
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"lines":[{"itemId":"itm_001","quantity":1}]}'
+
+Option B (Realtime check in browser):
+- Open dashboard in browser
+- Confirm it shows “Connected” (add a simple status indicator in UI if not already)
+- Run the place-order curl above
+- Confirm a new order appears in the dashboard within 2 seconds
+
+Observability quick checks
+- Jaeger traces: http://localhost:16686 (service name rop-backend)
+- Prometheus: http://localhost:9090 (targets show backend UP)
+- Grafana: http://localhost:3000 (admin/admin)
+
+Troubleshooting notes
+- If dashboard connects but no events arrive:
+  - confirm Redis is up in docker compose
+  - confirm backend WS endpoint: ws://localhost:8000/ws?restaurant_id=rst_001&role=KITCHEN
+  - check backend logs: make logs
+- If /health/ready is 503:
+  - confirm postgres/redis containers are healthy: docker compose ps
+
+Acceptance criteria for this doc update
+- README explicitly instructs to open “Terminal 1” and “Terminal 2” and run commands in parallel.
+- README includes a deterministic verification checklist for:
+  - health endpoints
+  - placing an order via curl
+  - confirming realtime update via dashboard
+CODEX>>

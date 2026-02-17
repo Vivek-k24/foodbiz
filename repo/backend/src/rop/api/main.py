@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-
+from fastapi.middleware.cors import CORSMiddleware
 from rop.api.middleware.request_id import RequestIDMiddleware
 from rop.api.routes.health import router as health_router
 from rop.api.routes.menu import router as menu_router
@@ -99,6 +99,13 @@ def create_app() -> FastAPI:
 
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
     configure_otel(app)
     return app
