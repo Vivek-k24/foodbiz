@@ -6,6 +6,7 @@ from opentelemetry import trace
 from rop.api.middleware.request_id import get_request_id
 from rop.application.dto.requests import PlaceOrderRequest
 from rop.application.dto.responses import OrderResponse
+from rop.application.use_cases.context import TraceContext
 from rop.application.use_cases.get_order import GetOrder, OrderNotFoundError
 from rop.application.use_cases.place_order import (
     MenuItemUnavailableError,
@@ -13,7 +14,6 @@ from rop.application.use_cases.place_order import (
     PlaceOrder,
     TableNotFoundError,
     TableNotOpenError,
-    TraceContext,
 )
 from rop.domain.common.ids import OrderId, RestaurantId, TableId
 from rop.infrastructure.db.repositories.menu_repo import SqlAlchemyMenuRepository

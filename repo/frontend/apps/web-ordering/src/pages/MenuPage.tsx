@@ -34,9 +34,15 @@ export function MenuPage() {
   const [menu, setMenu] = useState<MenuResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [orderResult, setOrderResult] = useState<string | null>(null);
 
   const endpoint = useMemo(
     () => `${apiBaseUrl}/v1/restaurants/rst_001/menu`,
+    []
+  );
+  const placeOrderEndpoint = useMemo(
+    () => `${apiBaseUrl}/v1/restaurants/rst_001/tables/tbl_001/orders`,
     []
   );
 
@@ -70,6 +76,27 @@ export function MenuPage() {
     };
   }, [endpoint]);
 
+  async function placeTestOrder(): Promise<void> {
+    setPlacingOrder(true);
+    setOrderResult(null);
+    try {
+      const response = await fetch(placeOrderEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lines: [{ itemId: "itm_001", quantity: 1 }] })
+      });
+      if (!response.ok) {
+        throw new Error(`order request failed (${response.status})`);
+      }
+      const payload = (await response.json()) as { orderId: string };
+      setOrderResult(`Created order ${payload.orderId}`);
+    } catch (err) {
+      setOrderResult(err instanceof Error ? err.message : "order failed");
+    } finally {
+      setPlacingOrder(false);
+    }
+  }
+
   if (loading) {
     return <main><p>Loading menu...</p></main>;
   }
@@ -85,6 +112,10 @@ export function MenuPage() {
       <h1>Restaurant Menu</h1>
       <p>Restaurant: {menu.restaurantId}</p>
       <p>Version: {menu.menuVersion}</p>
+      <button type="button" onClick={() => void placeTestOrder()} disabled={placingOrder}>
+        {placingOrder ? "Placing..." : "Place test order"}
+      </button>
+      {orderResult ? <p>{orderResult}</p> : null}
       <ul>
         {menu.items.map((item) => (
           <li key={item.itemId}>

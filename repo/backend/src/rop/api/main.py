@@ -2,23 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from fastapi.middleware.cors import CORSMiddleware
 from rop.api.middleware.request_id import RequestIDMiddleware
 from rop.api.routes.health import router as health_router
+from rop.api.routes.kitchen import router as kitchen_router
 from rop.api.routes.menu import router as menu_router
 from rop.api.routes.metrics import router as metrics_router
 from rop.api.routes.orders import router as orders_router
 from rop.api.routes.tables import router as tables_router
 from rop.api.ws.manager import ConnectionManager
 from rop.api.ws.routes import router as ws_router
-from rop.infrastructure.messaging.redis_event_listener import start_redis_fanout
+from rop.infrastructure.messaging.redis_ws_fanout import start_redis_ws_fanout
 from rop.infrastructure.observability.logging_config import configure_logging
 from rop.infrastructure.observability.otel import configure_otel
 
@@ -34,6 +36,19 @@ REQUEST_LATENCY = Histogram(
     "HTTP request duration in seconds",
     ["method", "path"],
 )
+
+
+def _cors_allow_origins() -> list[str]:
+    env = os.getenv("APP_ENV", "dev").lower()
+
+    # Dev/test: unblock everything (no credentials allowed)
+    if env in {"dev", "test"}:
+        return ["*"]
+
+    # Staging/prod: restrict to explicit allowlist
+    default_value = "https://your-prod-domain.com"
+    raw_value = os.getenv("CORS_ALLOW_ORIGINS", default_value)
+    return [origin.strip() for origin in raw_value.split(",") if origin.strip()]
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
@@ -76,7 +91,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.ws_manager = ConnectionManager()
-    fanout_task = asyncio.create_task(start_redis_fanout(app.state))
+    fanout_task = asyncio.create_task(start_redis_ws_fanout(app.state))
     app.state.redis_fanout_task = fanout_task
     try:
         yield
@@ -95,17 +110,19 @@ def create_app() -> FastAPI:
     app.include_router(menu_router)
     app.include_router(tables_router)
     app.include_router(orders_router)
+    app.include_router(kitchen_router)
     app.include_router(ws_router)
 
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+        CORSMiddleware,
+        allow_origins=_cors_allow_origins(),
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["ETag", "X-Request-Id"]
+    )
 
     configure_otel(app)
     return app

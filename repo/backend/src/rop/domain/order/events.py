@@ -14,3 +14,19 @@ class OrderPlaced:
     table_id: TableId
     total: Money
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class OrderAccepted:
+    order_id: OrderId
+    restaurant_id: RestaurantId
+    table_id: TableId
+    occurred_at: datetime
+
+
+@dataclass(frozen=True)
+class OrderReady:
+    order_id: OrderId
+    restaurant_id: RestaurantId
+    table_id: TableId
+    occurred_at: datetime

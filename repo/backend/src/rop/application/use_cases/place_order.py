@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from rop.application.dto.requests import PlaceOrderRequest
 from rop.application.dto.responses import OrderResponse
-from rop.application.mappers.events import to_order_placed_envelope_json
+from rop.application.mappers.event_envelope import serialize_order_event
 from rop.application.mappers.order_mapper import to_order_response
 from rop.application.ports.publisher import EventPublisher
 from rop.application.ports.repositories import MenuRepository, OrderRepository, TableRepository
+from rop.application.use_cases.context import TraceContext
 from rop.domain.common.ids import OrderId, OrderLineId, RestaurantId, TableId
 from rop.domain.common.money import Money
 from rop.domain.order.entities import OrderLine, create_placed_order
@@ -31,12 +31,6 @@ class MenuNotFoundError(Exception):
 
 class MenuItemUnavailableError(Exception):
     pass
-
-
-@dataclass(frozen=True)
-class TraceContext:
-    trace_id: str | None
-    request_id: str | None
 
 
 class PlaceOrder:
@@ -119,8 +113,9 @@ class PlaceOrder:
             total=order.total,
             created_at=order.created_at,
         )
-        message = to_order_placed_envelope_json(
-            event=event,
+        message = serialize_order_event(
+            event_type="order.placed",
+            occurred_at=event.created_at,
             order=order,
             trace_id=trace_ctx.trace_id,
             request_id=trace_ctx.request_id,

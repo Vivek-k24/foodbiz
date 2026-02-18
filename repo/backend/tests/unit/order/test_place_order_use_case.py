@@ -10,11 +10,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 from rop.application.dto.requests import PlaceOrderLineRequest, PlaceOrderRequest
+from rop.application.use_cases.context import TraceContext
 from rop.application.use_cases.place_order import (
     MenuItemUnavailableError,
     PlaceOrder,
     TableNotOpenError,
-    TraceContext,
 )
 from rop.domain.common.ids import MenuId, MenuItemId, RestaurantId, TableId
 from rop.domain.common.money import Money
@@ -51,6 +51,9 @@ class FakeOrderRepository:
 
     def get(self, order_id):
         return self.saved_order
+
+    def update(self, order: Order) -> None:
+        self.saved_order = order
 
 
 @dataclass
@@ -129,6 +132,22 @@ def test_place_order_rejects_unavailable_item() -> None:
             restaurant_id=RestaurantId("rst_001"),
             table_id=TableId("tbl_001"),
             request_dto=_request(),
+            trace_ctx=TraceContext(trace_id=None, request_id=None),
+        )
+
+
+def test_place_order_rejects_non_positive_quantity() -> None:
+    use_case = PlaceOrder(
+        menu_repository=FakeMenuRepository(_sample_menu()),
+        table_repository=FakeTableRepository(_table(TableStatus.OPEN)),
+        order_repository=FakeOrderRepository(),
+        publisher=FakePublisher(),
+    )
+    with pytest.raises(MenuItemUnavailableError):
+        use_case.execute(
+            restaurant_id=RestaurantId("rst_001"),
+            table_id=TableId("tbl_001"),
+            request_dto=_request(quantity=0),
             trace_ctx=TraceContext(trace_id=None, request_id=None),
         )
 

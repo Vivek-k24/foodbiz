@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from rop.application.dto.responses import TableResponse
-from rop.application.use_cases.table_lifecycle import GetTable, OpenTable, TableNotFoundError
+from rop.application.use_cases.open_table import GetTable, OpenTable, TableNotFoundError
 from rop.domain.common.ids import RestaurantId, TableId
 from rop.infrastructure.db.repositories.table_repo import SqlAlchemyTableRepository
 
