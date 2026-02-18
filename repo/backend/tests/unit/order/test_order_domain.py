@@ -80,3 +80,30 @@ def test_create_placed_order_calculates_total() -> None:
 
     assert order.total.amount_cents == 850
     assert order.total.currency == "USD"
+
+
+def test_order_transition_methods() -> None:
+    now = datetime.now(timezone.utc)
+    lines = [
+        OrderLine(
+            line_id=OrderLineId("orl_001"),
+            item_id=MenuItemId("itm_001"),
+            name="Item 1",
+            quantity=1,
+            unit_price=Money(amount_cents=300, currency="USD"),
+            line_total=Money(amount_cents=300, currency="USD"),
+            notes=None,
+        )
+    ]
+    order = create_placed_order(
+        order_id=OrderId("ord_001"),
+        restaurant_id=RestaurantId("rst_001"),
+        table_id=TableId("tbl_001"),
+        lines=lines,
+        now=now,
+    )
+    assert order.status == OrderStatus.PLACED
+    accepted = order.accept()
+    assert accepted.status == OrderStatus.ACCEPTED
+    ready = accepted.mark_ready()
+    assert ready.status == OrderStatus.READY

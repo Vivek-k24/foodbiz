@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import timezone
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from rop.application.ports.repositories import OrderRepository
@@ -83,3 +83,17 @@ class SqlAlchemyOrderRepository(OrderRepository):
             total=Money(amount_cents=model.total_cents, currency=model.currency),
             created_at=created_at,
         )
+
+    def update(self, order: Order) -> None:
+        statement = (
+            update(OrderModel)
+            .where(OrderModel.id == str(order.order_id))
+            .values(
+                status=order.status.value,
+                total_cents=order.total.amount_cents,
+                currency=order.total.currency,
+            )
+        )
+        with Session(self._engine) as session:
+            session.execute(statement)
+            session.commit()

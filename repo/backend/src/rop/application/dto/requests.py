@@ -17,7 +17,7 @@ class CamelBaseModel(BaseModel):
 
 class PlaceOrderLineRequest(CamelBaseModel):
     item_id: str
-    quantity: int = Field(ge=1)
+    quantity: int
     notes: str | None = None
 
 

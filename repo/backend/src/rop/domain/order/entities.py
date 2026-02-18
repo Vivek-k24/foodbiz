@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
 
@@ -10,6 +10,8 @@ from rop.domain.common.money import Money
 
 class OrderStatus(str, Enum):
     PLACED = "PLACED"
+    ACCEPTED = "ACCEPTED"
+    READY = "READY"
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,16 @@ class Order:
         if self.total.amount_cents != expected_total:
             raise ValueError("order total must equal sum of line totals")
 
+    def accept(self) -> Order:
+        if self.status != OrderStatus.PLACED:
+            raise OrderTransitionError(f"cannot accept order from status={self.status.value}")
+        return replace(self, status=OrderStatus.ACCEPTED)
+
+    def mark_ready(self) -> Order:
+        if self.status != OrderStatus.ACCEPTED:
+            raise OrderTransitionError(f"cannot mark ready from status={self.status.value}")
+        return replace(self, status=OrderStatus.READY)
+
 
 def create_placed_order(
     order_id: OrderId,
@@ -77,3 +89,7 @@ def create_placed_order(
         total=total,
         created_at=now,
     )
+
+
+class OrderTransitionError(Exception):
+    pass
