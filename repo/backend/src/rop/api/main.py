@@ -11,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-
 from rop.api.middleware.request_id import RequestIDMiddleware
 from rop.api.routes.health import router as health_router
 from rop.api.routes.kitchen import router as kitchen_router
@@ -40,7 +39,14 @@ REQUEST_LATENCY = Histogram(
 
 
 def _cors_allow_origins() -> list[str]:
-    default_value = "http://localhost:5173,http://localhost:5174"
+    env = os.getenv("APP_ENV", "dev").lower()
+
+    # Dev/test: unblock everything (no credentials allowed)
+    if env in {"dev", "test"}:
+        return ["*"]
+
+    # Staging/prod: restrict to explicit allowlist
+    default_value = "https://your-prod-domain.com"
     raw_value = os.getenv("CORS_ALLOW_ORIGINS", default_value)
     return [origin.strip() for origin in raw_value.split(",") if origin.strip()]
 
@@ -112,9 +118,10 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_allow_origins(),
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["ETag", "X-Request-Id"]
     )
 
     configure_otel(app)
