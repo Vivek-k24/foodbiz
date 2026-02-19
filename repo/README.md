@@ -35,14 +35,14 @@ From `repo/`:
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000` (`admin/admin`)
 
-## Run & Verify (ROP-004)
+## Run & Verify (ROP-006)
 
 ### Prereqs
 
 - Docker + Docker Compose installed
 - `pnpm` installed
 
-### Terminal 1 - Infrastructure + Backend
+### Terminal A - Infrastructure + Backend
 
 Run in `repo/`:
 
@@ -65,28 +65,28 @@ curl -s http://localhost:8000/health/ready
 curl -s http://localhost:8000/metrics | head
 ```
 
-### Terminal 2 - Web Ordering App
+### Terminal B - Kitchen Dashboard
 
 Open a new terminal and run in parallel:
 
 ```bash
 cd repo/frontend
 pnpm i
-pnpm --filter web-ordering dev -- --port 5173
-```
-
-Web ordering UI runs on `http://localhost:5173`.
-
-### Terminal 3 - Kitchen Dashboard
-
-Open another terminal and run in parallel:
-
-```bash
-cd repo/frontend
 pnpm --filter dashboard dev -- --port 5174
 ```
 
-Dashboard UI runs on `http://localhost:5174`.
+Dashboard runs on `http://localhost:5174`.
+
+### Terminal C (Optional) - Web Ordering App
+
+Open another terminal and run in parallel if you want to place orders from UI:
+
+```bash
+cd repo/frontend
+pnpm --filter web-ordering dev -- --port 5173
+```
+
+Web ordering runs on `http://localhost:5173`.
 
 Dashboard env (`repo/frontend/apps/dashboard/.env` or `.env.local`):
 
@@ -95,7 +95,14 @@ VITE_API_BASE_URL=http://localhost:8000
 VITE_WS_BASE_URL=ws://localhost:8000
 ```
 
-### Verification Checklist
+Web ordering env (`repo/frontend/apps/web-ordering/.env` or `.env.local`):
+
+```bash
+VITE_API_BASE_URL=http://localhost:8000
+VITE_WS_BASE_URL=ws://localhost:8000
+```
+
+### Verification Checklist (ROP-006)
 
 1. Open table (idempotent):
 
@@ -119,13 +126,41 @@ curl -i -X POST http://localhost:8000/v1/orders/<ORDER_ID>/ready
 curl -i http://localhost:8000/v1/orders/<ORDER_ID>
 ```
 
-4. Realtime check in browser:
+4. Verify table order history re-hydration endpoint:
+
+```bash
+curl -i "http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/orders?status=ALL&limit=10"
+```
+
+5. Close table guardrail (blocked while non-ready orders exist):
+
+```bash
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/close
+```
+
+Expected while non-ready orders exist: `409` with `TABLE_CLOSE_BLOCKED`.
+
+6. After all orders are `READY`, close table:
+
+```bash
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/close
+```
+
+7. Verify receipt-style summary:
+
+```bash
+curl -i http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/summary
+```
+
+8. Realtime + UI re-hydration checks in browser:
 
 - Open dashboard at `http://localhost:5174`.
 - Confirm it shows `Connection: Connected`.
-- Run the place-order curl command again.
-- Confirm a new order appears in the dashboard within 2 seconds.
-- Run accept/ready curls and confirm status updates to `ACCEPTED` then `READY`.
+- Place a new order (curl or web-ordering UI).
+- Confirm the order appears in dashboard within 2 seconds.
+- Run accept/ready curls and confirm status transitions update live.
+- Refresh the dashboard page and verify queue + table orders re-hydrate from REST.
+- Click `Close Table` in dashboard after orders are READY and verify summary/status update.
 
 ### Observability Quick Checks
 

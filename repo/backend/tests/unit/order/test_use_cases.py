@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 from rop.application.dto.requests import PlaceOrderLineRequest, PlaceOrderRequest
-from rop.application.ports.repositories import OptimisticConcurrencyError
+from rop.application.ports.repositories import OptimisticConcurrencyError, TableOrderSummaryData
 from rop.application.use_cases.accept_order import (
     AcceptOrder,
 )
@@ -110,6 +110,31 @@ class FakeOrderRepository:
         cursor: str | None,
     ) -> tuple[list[Order], str | None]:
         return [], None
+
+    def list_for_table(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+        status: OrderStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[Order], str | None]:
+        return [], None
+
+    def summarize_for_table(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+    ) -> TableOrderSummaryData:
+        return TableOrderSummaryData(
+            orders_total=0,
+            placed=0,
+            accepted=0,
+            ready=0,
+            amount_cents=0,
+            currency="USD",
+            last_order_at=None,
+        )
 
 
 class FakePublisher:

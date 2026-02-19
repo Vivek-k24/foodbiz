@@ -37,10 +37,25 @@ class Table:
             closed_at=None,
         )
 
+    def close(self, now: datetime) -> Table:
+        if self.status == TableStatus.CLOSED:
+            raise TableAlreadyClosedError(f"table {self.table_id} is already closed")
+        return Table(
+            table_id=self.table_id,
+            restaurant_id=self.restaurant_id,
+            status=TableStatus.CLOSED,
+            opened_at=self.opened_at,
+            closed_at=now,
+        )
+
     def ensure_open(self) -> None:
         if self.status != TableStatus.OPEN:
             raise TableClosedError(f"table {self.table_id} is not open")
 
 
 class TableClosedError(Exception):
+    pass
+
+
+class TableAlreadyClosedError(Exception):
     pass

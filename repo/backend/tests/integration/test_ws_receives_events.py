@@ -14,15 +14,19 @@ from rop.api.main import app
 
 
 def test_websocket_receives_order_transition_events() -> None:
+    table_id = "tbl_ws_001"
     events: "queue.Queue[str]" = queue.Queue()
     errors: "queue.Queue[Exception]" = queue.Queue()
 
     with TestClient(app) as client:
+        open_response = client.post(f"/v1/restaurants/rst_001/tables/{table_id}/open")
+        assert open_response.status_code == 200
+
         with client.websocket_connect("/ws?restaurant_id=rst_001&role=KITCHEN") as websocket:
 
             def _reader() -> None:
                 try:
-                    for _ in range(3):
+                    for _ in range(4):
                         events.put(websocket.receive_text())
                 except Exception as exc:
                     errors.put(exc)
@@ -31,7 +35,7 @@ def test_websocket_receives_order_transition_events() -> None:
             reader.start()
 
             place_response = client.post(
-                "/v1/restaurants/rst_001/tables/tbl_001/orders",
+                f"/v1/restaurants/rst_001/tables/{table_id}/orders",
                 json={"lines": [{"itemId": "itm_001", "quantity": 1}]},
             )
             assert place_response.status_code == 201
@@ -43,10 +47,13 @@ def test_websocket_receives_order_transition_events() -> None:
             ready_response = client.post(f"/v1/orders/{order_id}/ready")
             assert ready_response.status_code == 200
 
+            close_response = client.post(f"/v1/restaurants/rst_001/tables/{table_id}/close")
+            assert close_response.status_code == 200
+
             reader.join(timeout=2.0)
             assert not reader.is_alive(), "timed out waiting for websocket events"
             assert errors.empty(), "unexpected websocket read error"
 
-    raw_messages = [events.get_nowait() for _ in range(3)]
+    raw_messages = [events.get_nowait() for _ in range(4)]
     event_types = [json.loads(message)["event_type"] for message in raw_messages]
-    assert event_types == ["order.placed", "order.accepted", "order.ready"]
+    assert event_types == ["order.placed", "order.accepted", "order.ready", "table.closed"]

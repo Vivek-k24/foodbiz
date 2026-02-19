@@ -19,6 +19,7 @@ from rop.api.routes.kitchen import router as kitchen_router
 from rop.api.routes.menu import router as menu_router
 from rop.api.routes.metrics import router as metrics_router
 from rop.api.routes.orders import router as orders_router
+from rop.api.routes.table_orders import router as table_orders_router
 from rop.api.routes.tables import router as tables_router
 from rop.api.ws.manager import ConnectionManager
 from rop.api.ws.routes import router as ws_router
@@ -112,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(metrics_router)
     app.include_router(menu_router)
     app.include_router(tables_router)
+    app.include_router(table_orders_router)
     app.include_router(orders_router)
     app.include_router(kitchen_router)
     app.include_router(ws_router)

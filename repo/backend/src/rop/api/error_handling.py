@@ -13,6 +13,7 @@ from rop.application.use_cases.accept_order import (
 )
 from rop.application.use_cases.accept_order import OrderConflictError as AcceptOrderConflictError
 from rop.application.use_cases.accept_order import OrderNotFoundError as AcceptOrderNotFoundError
+from rop.application.use_cases.close_table import TableCloseBlockedError, TableNotOpenForCloseError
 from rop.application.use_cases.get_menu import MenuNotFoundError as GetMenuNotFoundError
 from rop.application.use_cases.get_order import OrderNotFoundError as GetOrderNotFoundError
 from rop.application.use_cases.kitchen_queue import (
@@ -38,6 +39,10 @@ from rop.application.use_cases.place_order import (
 from rop.application.use_cases.place_order import (
     TableNotFoundError as PlaceOrderTableNotFoundError,
 )
+from rop.application.use_cases.table_orders import (
+    InvalidTableOrdersCursorError,
+    InvalidTableOrdersStatusError,
+)
 
 
 def _error_response(
@@ -62,10 +67,12 @@ def _error_response(
 
 def _exception_handler(status_code: int, code: str):
     async def handler(_: Request, exc: Exception) -> JSONResponse:
+        details = getattr(exc, "details", None)
         return _error_response(
             status_code=status_code,
             code=code,
             message=str(exc),
+            details=details if isinstance(details, dict) else None,
         )
 
     return handler
@@ -108,6 +115,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         (GetTableNotFoundError, 404, "TABLE_NOT_FOUND"),
         (PlaceOrderTableNotFoundError, 404, "TABLE_NOT_FOUND"),
         (TableNotOpenError, 409, "TABLE_NOT_OPEN"),
+        (TableNotOpenForCloseError, 409, "TABLE_NOT_OPEN"),
+        (TableCloseBlockedError, 409, "TABLE_CLOSE_BLOCKED"),
         (MenuItemUnavailableError, 400, "MENU_ITEM_UNAVAILABLE"),
         (
             IdempotencyReplayMismatchError,
@@ -128,6 +137,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         (ReadyOrderConflictError, 409, "CONFLICT"),
         (InvalidKitchenQueueStatusError, 400, "INVALID_KITCHEN_QUEUE_STATUS"),
         (InvalidKitchenQueueCursorError, 400, "INVALID_KITCHEN_QUEUE_CURSOR"),
+        (InvalidTableOrdersStatusError, 400, "INVALID_TABLE_ORDERS_STATUS"),
+        (InvalidTableOrdersCursorError, 400, "INVALID_TABLE_ORDERS_CURSOR"),
     ]
 
     for exc_cls, status_code, code in mappings:

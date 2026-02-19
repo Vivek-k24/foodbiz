@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
 from rop.domain.common.ids import OrderId, RestaurantId, TableId
@@ -54,6 +56,21 @@ class OrderRepository(Protocol):
         cursor: str | None,
     ) -> tuple[list[Order], str | None]: ...
 
+    def list_for_table(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+        status: OrderStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[Order], str | None]: ...
+
+    def summarize_for_table(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+    ) -> TableOrderSummaryData: ...
+
 
 class IdempotencyReplayMismatchError(Exception):
     pass
@@ -65,3 +82,14 @@ class OptimisticConcurrencyError(Exception):
 
 class InvalidCursorError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class TableOrderSummaryData:
+    orders_total: int
+    placed: int
+    accepted: int
+    ready: int
+    amount_cents: int
+    currency: str
+    last_order_at: datetime | None

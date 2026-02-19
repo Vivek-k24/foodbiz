@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 
-from sqlalchemy import Engine, and_, or_, select, update
+from sqlalchemy import Engine, and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -12,6 +12,7 @@ from rop.application.ports.repositories import (
     InvalidCursorError,
     OptimisticConcurrencyError,
     OrderRepository,
+    TableOrderSummaryData,
 )
 from rop.domain.common.ids import MenuItemId, OrderId, OrderLineId, RestaurantId, TableId
 from rop.domain.common.money import Money
@@ -202,6 +203,107 @@ class SqlAlchemyOrderRepository(OrderRepository):
             last = page_models[-1]
             next_cursor = _encode_cursor(last.created_at, last.id)
         return orders, next_cursor
+
+    def list_for_table(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+        status: OrderStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[Order], str | None]:
+        statement = (
+            select(OrderModel)
+            .options(joinedload(OrderModel.lines))
+            .where(
+                OrderModel.restaurant_id == str(restaurant_id),
+                OrderModel.table_id == str(table_id),
+            )
+        )
+        if status is not None:
+            statement = statement.where(OrderModel.status == status.value)
+
+        cursor_parts = _decode_cursor(cursor) if cursor else None
+        if cursor_parts is not None:
+            cursor_created_at, cursor_order_id = cursor_parts
+            statement = statement.where(
+                or_(
+                    OrderModel.created_at < cursor_created_at,
+                    and_(
+                        OrderModel.created_at == cursor_created_at,
+                        OrderModel.id < cursor_order_id,
+                    ),
+                )
+            )
+
+        statement = statement.order_by(OrderModel.created_at.desc(), OrderModel.id.desc()).limit(
+            limit + 1
+        )
+
+        with Session(self._engine) as session:
+            models = list(session.execute(statement).unique().scalars().all())
+
+        has_more = len(models) > limit
+        page_models = models[:limit]
+        orders = [self._to_domain(model) for model in page_models]
+        next_cursor: str | None = None
+        if has_more and page_models:
+            last = page_models[-1]
+            next_cursor = _encode_cursor(last.created_at, last.id)
+        return orders, next_cursor
+
+    def summarize_for_table(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+    ) -> TableOrderSummaryData:
+        aggregates_statement = select(
+            func.count(OrderModel.id),
+            func.coalesce(func.sum(OrderModel.total_cents), 0),
+            func.coalesce(
+                func.sum(case((OrderModel.status == "PLACED", 1), else_=0)),
+                0,
+            ),
+            func.coalesce(
+                func.sum(case((OrderModel.status == "ACCEPTED", 1), else_=0)),
+                0,
+            ),
+            func.coalesce(
+                func.sum(case((OrderModel.status == "READY", 1), else_=0)),
+                0,
+            ),
+            func.max(OrderModel.created_at),
+        ).where(
+            OrderModel.restaurant_id == str(restaurant_id),
+            OrderModel.table_id == str(table_id),
+        )
+        currency_statement = (
+            select(OrderModel.currency)
+            .where(
+                OrderModel.restaurant_id == str(restaurant_id),
+                OrderModel.table_id == str(table_id),
+            )
+            .order_by(OrderModel.created_at.desc(), OrderModel.id.desc())
+            .limit(1)
+        )
+
+        with Session(self._engine) as session:
+            aggregates_row = session.execute(aggregates_statement).one()
+            currency = session.execute(currency_statement).scalar_one_or_none() or "USD"
+
+        last_order_at = aggregates_row[5]
+        if last_order_at and last_order_at.tzinfo is None:
+            last_order_at = last_order_at.replace(tzinfo=timezone.utc)
+
+        return TableOrderSummaryData(
+            orders_total=int(aggregates_row[0] or 0),
+            amount_cents=int(aggregates_row[1] or 0),
+            placed=int(aggregates_row[2] or 0),
+            accepted=int(aggregates_row[3] or 0),
+            ready=int(aggregates_row[4] or 0),
+            last_order_at=last_order_at,
+            currency=currency,
+        )
 
     def _to_model(self, order: Order) -> OrderModel:
         order_model = OrderModel(

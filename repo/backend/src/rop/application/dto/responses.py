@@ -59,3 +59,26 @@ class TableResponse(BaseModel):
 class KitchenQueueResponse(BaseModel):
     orders: list[OrderResponse] = Field(default_factory=list)
     nextCursor: str | None = None
+
+
+class TableOrdersResponse(BaseModel):
+    orders: list[OrderResponse] = Field(default_factory=list)
+    nextCursor: str | None = None
+
+
+class TableSummaryCountsResponse(BaseModel):
+    ordersTotal: int
+    placed: int
+    accepted: int
+    ready: int
+
+
+class TableSummaryResponse(BaseModel):
+    tableId: str
+    restaurantId: str
+    status: str
+    openedAt: datetime | None = None
+    closedAt: datetime | None = None
+    totals: MoneyResponse
+    counts: TableSummaryCountsResponse
+    lastOrderAt: datetime | None = None
