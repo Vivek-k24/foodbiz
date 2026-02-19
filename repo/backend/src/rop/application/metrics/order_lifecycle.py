@@ -34,6 +34,18 @@ KITCHEN_QUEUE_SIZE = Gauge(
     ["restaurant_id", "status"],
 )
 
+TABLES_CLOSED_TOTAL = Counter(
+    "rop_tables_closed_total",
+    "Total number of tables closed.",
+    ["restaurant_id"],
+)
+
+TABLE_CLOSE_BLOCKED_TOTAL = Counter(
+    "rop_table_close_blocked_total",
+    "Total number of blocked table close attempts.",
+    ["restaurant_id", "reason"],
+)
+
 
 def record_order_status(order: Order) -> None:
     ORDERS_TOTAL.labels(
@@ -58,3 +70,11 @@ def record_time_to_ready(order: Order, now: datetime | None = None) -> None:
 
 def record_kitchen_queue_size(restaurant_id: str, status: str, size: int) -> None:
     KITCHEN_QUEUE_SIZE.labels(restaurant_id=restaurant_id, status=status).set(size)
+
+
+def record_table_closed(restaurant_id: str) -> None:
+    TABLES_CLOSED_TOTAL.labels(restaurant_id=restaurant_id).inc()
+
+
+def record_table_close_blocked(restaurant_id: str, reason: str) -> None:
+    TABLE_CLOSE_BLOCKED_TOTAL.labels(restaurant_id=restaurant_id, reason=reason).inc()

@@ -13,6 +13,7 @@ from rop.application.dto.requests import PlaceOrderLineRequest, PlaceOrderReques
 from rop.application.ports.repositories import (
     IdempotencyReplayMismatchError as RepoIdempotencyReplayMismatchError,
 )
+from rop.application.ports.repositories import TableOrderSummaryData
 from rop.application.use_cases.context import TraceContext
 from rop.application.use_cases.place_order import (
     IdempotencyReplayMismatchError,
@@ -124,6 +125,31 @@ class FakeOrderRepository:
         cursor: str | None,
     ) -> tuple[list[Order], str | None]:
         return [], None
+
+    def list_for_table(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+        status: OrderStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[Order], str | None]:
+        return [], None
+
+    def summarize_for_table(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+    ) -> TableOrderSummaryData:
+        return TableOrderSummaryData(
+            orders_total=0,
+            placed=0,
+            accepted=0,
+            ready=0,
+            amount_cents=0,
+            currency="USD",
+            last_order_at=None,
+        )
 
 
 @dataclass
