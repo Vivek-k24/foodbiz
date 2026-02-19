@@ -4,7 +4,7 @@ from typing import Protocol
 
 from rop.domain.common.ids import OrderId, RestaurantId, TableId
 from rop.domain.menu.entities import Menu
-from rop.domain.order.entities import Order
+from rop.domain.order.entities import Order, OrderStatus
 from rop.domain.table.entities import Table
 
 
@@ -24,3 +24,44 @@ class OrderRepository(Protocol):
     def get(self, order_id: OrderId) -> Order | None: ...
 
     def update(self, order: Order) -> None: ...
+
+    def get_by_idempotency(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+        key: str,
+    ) -> Order | None: ...
+
+    def add_with_idempotency(
+        self,
+        order: Order,
+        key: str,
+        payload_hash: str,
+    ) -> Order: ...
+
+    def update_status_with_version(
+        self,
+        order_id: OrderId,
+        new_status: OrderStatus,
+        expected_version: int,
+    ) -> Order: ...
+
+    def list_for_kitchen(
+        self,
+        restaurant_id: RestaurantId,
+        status: OrderStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[Order], str | None]: ...
+
+
+class IdempotencyReplayMismatchError(Exception):
+    pass
+
+
+class OptimisticConcurrencyError(Exception):
+    pass
+
+
+class InvalidCursorError(Exception):
+    pass

@@ -107,3 +107,26 @@ def test_order_transition_methods() -> None:
     assert accepted.status == OrderStatus.ACCEPTED
     ready = accepted.mark_ready()
     assert ready.status == OrderStatus.READY
+
+
+def test_order_version_must_be_positive() -> None:
+    line = OrderLine(
+        line_id=OrderLineId("orl_001"),
+        item_id=MenuItemId("itm_001"),
+        name="Item",
+        quantity=1,
+        unit_price=Money(amount_cents=100, currency="USD"),
+        line_total=Money(amount_cents=100, currency="USD"),
+        notes=None,
+    )
+    with pytest.raises(ValueError):
+        Order(
+            order_id=OrderId("ord_001"),
+            restaurant_id=RestaurantId("rst_001"),
+            table_id=TableId("tbl_001"),
+            status=OrderStatus.PLACED,
+            lines=[line],
+            total=Money(amount_cents=100, currency="USD"),
+            created_at=datetime.now(timezone.utc),
+            version=0,
+        )

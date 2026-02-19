@@ -10,8 +10,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 from rop.application.dto.requests import PlaceOrderLineRequest, PlaceOrderRequest
+from rop.application.ports.repositories import (
+    IdempotencyReplayMismatchError as RepoIdempotencyReplayMismatchError,
+)
 from rop.application.use_cases.context import TraceContext
 from rop.application.use_cases.place_order import (
+    IdempotencyReplayMismatchError,
     MenuItemUnavailableError,
     PlaceOrder,
     TableNotOpenError,
@@ -19,7 +23,7 @@ from rop.application.use_cases.place_order import (
 from rop.domain.common.ids import MenuId, MenuItemId, RestaurantId, TableId
 from rop.domain.common.money import Money
 from rop.domain.menu.entities import Menu, MenuItem
-from rop.domain.order.entities import Order
+from rop.domain.order.entities import Order, OrderStatus
 from rop.domain.table.entities import Table, TableStatus
 
 
@@ -45,6 +49,7 @@ class FakeTableRepository:
 class FakeOrderRepository:
     def __init__(self) -> None:
         self.saved_order: Order | None = None
+        self.by_idempotency: dict[tuple[str, str, str], tuple[Order, str]] = {}
 
     def add(self, order: Order) -> None:
         self.saved_order = order
@@ -54,6 +59,71 @@ class FakeOrderRepository:
 
     def update(self, order: Order) -> None:
         self.saved_order = order
+
+    def get_by_idempotency(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+        key: str,
+    ) -> Order | None:
+        row = self.by_idempotency.get((str(restaurant_id), str(table_id), key))
+        if row is None:
+            return None
+        return row[0]
+
+    def add_with_idempotency(
+        self,
+        order: Order,
+        key: str,
+        payload_hash: str,
+    ) -> Order:
+        lookup = (str(order.restaurant_id), str(order.table_id), key)
+        existing = self.by_idempotency.get(lookup)
+        if existing is not None:
+            existing_order, existing_hash = existing
+            if existing_hash != payload_hash:
+                raise RepoIdempotencyReplayMismatchError(
+                    f"idempotency key replay with different payload: {key}"
+                )
+            return existing_order
+        self.saved_order = order
+        self.by_idempotency[lookup] = (order, payload_hash)
+        return order
+
+    def update_status_with_version(
+        self,
+        order_id,
+        new_status: OrderStatus,
+        expected_version: int,
+    ) -> Order:
+        if self.saved_order is None:
+            raise RuntimeError("order not found")
+        if str(self.saved_order.order_id) != str(order_id):
+            raise RuntimeError("order not found")
+        if self.saved_order.version != expected_version:
+            raise RuntimeError("version conflict")
+        self.saved_order = Order(
+            order_id=self.saved_order.order_id,
+            restaurant_id=self.saved_order.restaurant_id,
+            table_id=self.saved_order.table_id,
+            status=new_status,
+            lines=self.saved_order.lines,
+            total=self.saved_order.total,
+            created_at=self.saved_order.created_at,
+            version=self.saved_order.version + 1,
+            idempotency_key=self.saved_order.idempotency_key,
+            idempotency_hash=self.saved_order.idempotency_hash,
+        )
+        return self.saved_order
+
+    def list_for_kitchen(
+        self,
+        restaurant_id: RestaurantId,
+        status: OrderStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[Order], str | None]:
+        return [], None
 
 
 @dataclass
@@ -174,3 +244,58 @@ def test_place_order_happy_path_persists_and_publishes() -> None:
     assert len(publisher.calls) == 1
     assert publisher.calls[0].channel == "events:rst_001"
     assert '"event_type":"order.placed"' in publisher.calls[0].message
+
+
+def test_place_order_idempotency_returns_same_order_for_same_payload() -> None:
+    order_repository = FakeOrderRepository()
+    publisher = FakePublisher()
+    use_case = PlaceOrder(
+        menu_repository=FakeMenuRepository(_sample_menu()),
+        table_repository=FakeTableRepository(_table(TableStatus.OPEN)),
+        order_repository=order_repository,
+        publisher=publisher,
+    )
+
+    first = use_case.execute(
+        restaurant_id=RestaurantId("rst_001"),
+        table_id=TableId("tbl_001"),
+        request_dto=_request(quantity=1),
+        trace_ctx=TraceContext(trace_id="trace-1", request_id="req-1"),
+        idempotency_key="idem-001",
+    )
+    second = use_case.execute(
+        restaurant_id=RestaurantId("rst_001"),
+        table_id=TableId("tbl_001"),
+        request_dto=_request(quantity=1),
+        trace_ctx=TraceContext(trace_id="trace-2", request_id="req-2"),
+        idempotency_key="idem-001",
+    )
+
+    assert first.orderId == second.orderId
+    assert len(publisher.calls) == 1
+
+
+def test_place_order_idempotency_replay_mismatch_raises() -> None:
+    order_repository = FakeOrderRepository()
+    use_case = PlaceOrder(
+        menu_repository=FakeMenuRepository(_sample_menu()),
+        table_repository=FakeTableRepository(_table(TableStatus.OPEN)),
+        order_repository=order_repository,
+        publisher=FakePublisher(),
+    )
+
+    use_case.execute(
+        restaurant_id=RestaurantId("rst_001"),
+        table_id=TableId("tbl_001"),
+        request_dto=_request(quantity=1),
+        trace_ctx=TraceContext(trace_id="trace-1", request_id="req-1"),
+        idempotency_key="idem-001",
+    )
+    with pytest.raises(IdempotencyReplayMismatchError):
+        use_case.execute(
+            restaurant_id=RestaurantId("rst_001"),
+            table_id=TableId("tbl_001"),
+            request_dto=_request(quantity=2),
+            trace_ctx=TraceContext(trace_id="trace-2", request_id="req-2"),
+            idempotency_key="idem-001",
+        )

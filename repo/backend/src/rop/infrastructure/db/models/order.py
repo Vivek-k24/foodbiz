@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from rop.infrastructure.db.models.menu import Base
@@ -23,6 +23,7 @@ class OrderModel(Base):
         nullable=False,
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -30,6 +31,8 @@ class OrderModel(Base):
     )
     total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    idempotency_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     lines: Mapped[list["OrderLineModel"]] = relationship(
         back_populates="order",
@@ -40,6 +43,12 @@ class OrderModel(Base):
     __table_args__ = (
         Index("ix_orders_restaurant_created_at_desc", "restaurant_id", "created_at"),
         Index("ix_orders_table_created_at_desc", "table_id", "created_at"),
+        UniqueConstraint(
+            "restaurant_id",
+            "table_id",
+            "idempotency_key",
+            name="uq_orders_restaurant_table_idempotency_key",
+        ),
     )
 
 

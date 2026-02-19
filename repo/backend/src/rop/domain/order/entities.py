@@ -43,10 +43,15 @@ class Order:
     lines: list[OrderLine]
     total: Money
     created_at: datetime
+    version: int = 1
+    idempotency_key: str | None = None
+    idempotency_hash: str | None = None
 
     def __post_init__(self) -> None:
         if not self.lines:
             raise ValueError("order must contain at least one line")
+        if self.version < 1:
+            raise ValueError("order version must be >= 1")
         line_currency = self.lines[0].line_total.currency
         if self.total.currency != line_currency:
             raise ValueError("order total currency must match line currency")
@@ -71,6 +76,9 @@ def create_placed_order(
     table_id: TableId,
     lines: list[OrderLine],
     now: datetime,
+    *,
+    idempotency_key: str | None = None,
+    idempotency_hash: str | None = None,
 ) -> Order:
     if not lines:
         raise ValueError("order must contain at least one line")
@@ -88,6 +96,9 @@ def create_placed_order(
         lines=lines,
         total=total,
         created_at=now,
+        version=1,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency_hash,
     )
 
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from rop.application.dto.responses import TableResponse
-from rop.application.use_cases.open_table import GetTable, OpenTable, TableNotFoundError
+from rop.application.use_cases.open_table import GetTable, OpenTable
 from rop.domain.common.ids import RestaurantId, TableId
 from rop.infrastructure.db.repositories.table_repo import SqlAlchemyTableRepository
 
@@ -29,10 +29,7 @@ def open_table(restaurant_id: str, table_id: str) -> TableResponse:
 
 @router.get("/v1/restaurants/{restaurant_id}/tables/{table_id}", response_model=TableResponse)
 def get_table(restaurant_id: str, table_id: str) -> TableResponse:
-    try:
-        return _get_table_use_case().execute(
-            restaurant_id=RestaurantId(restaurant_id),
-            table_id=TableId(table_id),
-        )
-    except TableNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _get_table_use_case().execute(
+        restaurant_id=RestaurantId(restaurant_id),
+        table_id=TableId(table_id),
+    )

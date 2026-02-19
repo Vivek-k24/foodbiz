@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+
+from rop.api.error_handling import register_exception_handlers
 from rop.api.middleware.request_id import RequestIDMiddleware
 from rop.api.routes.health import router as health_router
 from rop.api.routes.kitchen import router as kitchen_router
@@ -105,6 +107,7 @@ def create_app() -> FastAPI:
     configure_logging()
 
     app = FastAPI(title="ROP Backend", version="0.1.0", lifespan=lifespan)
+    register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(metrics_router)
     app.include_router(menu_router)
@@ -121,7 +124,7 @@ def create_app() -> FastAPI:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["ETag", "X-Request-Id"]
+        expose_headers=["ETag", "X-Request-Id"],
     )
 
     configure_otel(app)

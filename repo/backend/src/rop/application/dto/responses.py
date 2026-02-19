@@ -54,3 +54,8 @@ class TableResponse(BaseModel):
     status: str
     openedAt: datetime | None = None
     closedAt: datetime | None = None
+
+
+class KitchenQueueResponse(BaseModel):
+    orders: list[OrderResponse] = Field(default_factory=list)
+    nextCursor: str | None = None

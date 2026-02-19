@@ -19,13 +19,25 @@ def test_order_flow_is_persisted() -> None:
         assert place_response.status_code == 201
         order_id = place_response.json()["orderId"]
 
+        invalid_ready_response = client.post(f"/v1/orders/{order_id}/ready")
+        assert invalid_ready_response.status_code == 409
+        assert invalid_ready_response.json()["error"]["code"] == "INVALID_ORDER_TRANSITION"
+
         accept_response = client.post(f"/v1/orders/{order_id}/accept")
         assert accept_response.status_code == 200
         assert accept_response.json()["status"] == "ACCEPTED"
 
+        accept_retry_response = client.post(f"/v1/orders/{order_id}/accept")
+        assert accept_retry_response.status_code == 200
+        assert accept_retry_response.json()["status"] == "ACCEPTED"
+
         ready_response = client.post(f"/v1/orders/{order_id}/ready")
         assert ready_response.status_code == 200
         assert ready_response.json()["status"] == "READY"
+
+        ready_retry_response = client.post(f"/v1/orders/{order_id}/ready")
+        assert ready_retry_response.status_code == 200
+        assert ready_retry_response.json()["status"] == "READY"
 
         get_response = client.get(f"/v1/orders/{order_id}")
         assert get_response.status_code == 200
