@@ -30,6 +30,12 @@ class FakeTableRepository:
     def upsert(self, table: Table) -> None:
         self._table = table
 
+    def restaurant_exists(self, restaurant_id: RestaurantId) -> bool:
+        return True
+
+    def list_for_restaurant(self, restaurant_id, status, limit, cursor):
+        return [], None
+
 
 class FakeOrderRepository:
     def __init__(self, summary: TableOrderSummaryData) -> None:

@@ -178,3 +178,76 @@ curl -i http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/summary
   - confirm Postgres and Redis containers are running: `docker compose ps`
 - If frontend ports conflict:
   - run web-ordering on `5173` and dashboard on `5174` explicitly using `--port`.
+
+## Run & Verify (ROP-007)
+
+### Terminal A - Infrastructure + Backend
+
+```bash
+cd repo
+make up
+make migrate
+make seed
+```
+
+### Terminal B - Dashboard
+
+Run in parallel:
+
+```bash
+cd repo/frontend
+pnpm i
+pnpm --filter dashboard dev -- --port 5174
+```
+
+Dashboard URL: `http://localhost:5174`
+
+### Verification Checklist (Copy/Paste)
+
+1. Open a new table:
+
+```bash
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_002/open
+```
+
+2. List OPEN tables:
+
+```bash
+curl -s "http://localhost:8000/v1/restaurants/rst_001/tables?status=OPEN&limit=50"
+```
+
+3. Place an order on `tbl_002`:
+
+```bash
+curl -i -X POST "http://localhost:8000/v1/restaurants/rst_001/tables/tbl_002/orders" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: rop007-smoke-001" \
+  -d '{"lines":[{"itemId":"itm_001","quantity":1}],"note":"rop-007 smoke"}'
+```
+
+4. Accept and mark ready (replace `<ORDER_ID>`):
+
+```bash
+curl -i -X POST http://localhost:8000/v1/orders/<ORDER_ID>/accept
+curl -i -X POST http://localhost:8000/v1/orders/<ORDER_ID>/ready
+```
+
+5. List OPEN tables again and confirm `tbl_002` has `lastOrderAt`:
+
+```bash
+curl -s "http://localhost:8000/v1/restaurants/rst_001/tables?status=OPEN&limit=50"
+```
+
+6. Close `tbl_002` and list CLOSED tables:
+
+```bash
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_002/close
+curl -s "http://localhost:8000/v1/restaurants/rst_001/tables?status=CLOSED&limit=50"
+```
+
+7. Dashboard sanity checks:
+
+- Open `http://localhost:5174` and switch to `TABLES`.
+- Confirm `tbl_002` appears and updates as events arrive.
+- Refresh the page and confirm tables are re-hydrated from REST.
+- Click a table row and confirm selected table orders/summary hydrate.

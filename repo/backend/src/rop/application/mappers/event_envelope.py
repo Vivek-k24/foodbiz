@@ -97,3 +97,27 @@ def serialize_table_closed_event(
             "closedAt": closed_at.isoformat(),
         },
     )
+
+
+def serialize_table_opened_event(
+    *,
+    occurred_at: datetime,
+    restaurant_id: str,
+    table_id: str,
+    opened_at: datetime,
+    trace_id: str | None,
+    request_id: str | None,
+) -> str:
+    return _serialize_event(
+        event_type="table.opened",
+        occurred_at=occurred_at,
+        restaurant_id=restaurant_id,
+        trace_id=trace_id,
+        request_id=request_id,
+        payload={
+            "tableId": table_id,
+            "restaurantId": restaurant_id,
+            "status": "OPEN",
+            "openedAt": opened_at.isoformat(),
+        },
+    )

@@ -7,7 +7,7 @@ from typing import Protocol
 from rop.domain.common.ids import OrderId, RestaurantId, TableId
 from rop.domain.menu.entities import Menu
 from rop.domain.order.entities import Order, OrderStatus
-from rop.domain.table.entities import Table
+from rop.domain.table.entities import Table, TableStatus
 
 
 class MenuRepository(Protocol):
@@ -18,6 +18,16 @@ class TableRepository(Protocol):
     def get(self, table_id: TableId, restaurant_id: RestaurantId) -> Table | None: ...
 
     def upsert(self, table: Table) -> None: ...
+
+    def restaurant_exists(self, restaurant_id: RestaurantId) -> bool: ...
+
+    def list_for_restaurant(
+        self,
+        restaurant_id: RestaurantId,
+        status: TableStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[TableRegistryRowData], str | None]: ...
 
 
 class OrderRepository(Protocol):
@@ -93,3 +103,9 @@ class TableOrderSummaryData:
     amount_cents: int
     currency: str
     last_order_at: datetime | None
+
+
+@dataclass(frozen=True)
+class TableRegistryRowData:
+    table: Table
+    summary: TableOrderSummaryData

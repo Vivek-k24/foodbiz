@@ -5,6 +5,7 @@ import queue
 import sys
 import threading
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -14,25 +15,25 @@ from rop.api.main import app
 
 
 def test_websocket_receives_order_transition_events() -> None:
-    table_id = "tbl_ws_001"
+    table_id = f"tbl_ws_{uuid4().hex[:8]}"
     events: "queue.Queue[str]" = queue.Queue()
     errors: "queue.Queue[Exception]" = queue.Queue()
 
     with TestClient(app) as client:
-        open_response = client.post(f"/v1/restaurants/rst_001/tables/{table_id}/open")
-        assert open_response.status_code == 200
-
         with client.websocket_connect("/ws?restaurant_id=rst_001&role=KITCHEN") as websocket:
 
             def _reader() -> None:
                 try:
-                    for _ in range(4):
+                    for _ in range(5):
                         events.put(websocket.receive_text())
                 except Exception as exc:
                     errors.put(exc)
 
             reader = threading.Thread(target=_reader, daemon=True)
             reader.start()
+
+            open_response = client.post(f"/v1/restaurants/rst_001/tables/{table_id}/open")
+            assert open_response.status_code == 200
 
             place_response = client.post(
                 f"/v1/restaurants/rst_001/tables/{table_id}/orders",
@@ -54,6 +55,12 @@ def test_websocket_receives_order_transition_events() -> None:
             assert not reader.is_alive(), "timed out waiting for websocket events"
             assert errors.empty(), "unexpected websocket read error"
 
-    raw_messages = [events.get_nowait() for _ in range(4)]
+    raw_messages = [events.get_nowait() for _ in range(5)]
     event_types = [json.loads(message)["event_type"] for message in raw_messages]
-    assert event_types == ["order.placed", "order.accepted", "order.ready", "table.closed"]
+    assert event_types == [
+        "table.opened",
+        "order.placed",
+        "order.accepted",
+        "order.ready",
+        "table.closed",
+    ]
