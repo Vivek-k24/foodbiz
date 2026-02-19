@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 from rop.application.dto.requests import PlaceOrderLineRequest, PlaceOrderRequest
+from rop.application.ports.repositories import OptimisticConcurrencyError
 from rop.application.use_cases.accept_order import (
     AcceptOrder,
 )
@@ -27,7 +28,7 @@ from rop.application.use_cases.place_order import PlaceOrder
 from rop.domain.common.ids import MenuId, MenuItemId, OrderId, RestaurantId, TableId
 from rop.domain.common.money import Money
 from rop.domain.menu.entities import Menu, MenuItem
-from rop.domain.order.entities import Order
+from rop.domain.order.entities import Order, OrderStatus
 from rop.domain.table.entities import Table, TableStatus
 
 
@@ -62,6 +63,53 @@ class FakeOrderRepository:
 
     def update(self, order: Order) -> None:
         self._orders[str(order.order_id)] = order
+
+    def get_by_idempotency(
+        self,
+        restaurant_id: RestaurantId,
+        table_id: TableId,
+        key: str,
+    ) -> Order | None:
+        return None
+
+    def add_with_idempotency(self, order: Order, key: str, payload_hash: str) -> Order:
+        self._orders[str(order.order_id)] = order
+        return order
+
+    def update_status_with_version(
+        self,
+        order_id: OrderId,
+        new_status: OrderStatus,
+        expected_version: int,
+    ) -> Order:
+        order = self._orders.get(str(order_id))
+        if order is None:
+            raise RuntimeError("order not found")
+        if order.version != expected_version:
+            raise OptimisticConcurrencyError("version conflict")
+        updated = Order(
+            order_id=order.order_id,
+            restaurant_id=order.restaurant_id,
+            table_id=order.table_id,
+            status=new_status,
+            lines=order.lines,
+            total=order.total,
+            created_at=order.created_at,
+            version=order.version + 1,
+            idempotency_key=order.idempotency_key,
+            idempotency_hash=order.idempotency_hash,
+        )
+        self._orders[str(order_id)] = updated
+        return updated
+
+    def list_for_kitchen(
+        self,
+        restaurant_id: RestaurantId,
+        status: OrderStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[Order], str | None]:
+        return [], None
 
 
 class FakePublisher:
@@ -164,8 +212,24 @@ def test_invalid_transitions_raise() -> None:
         order_id=OrderId(placed.orderId),
         trace_ctx=TraceContext(trace_id=None, request_id=None),
     )
+    accepted_again = AcceptOrder(order_repository=order_repository, publisher=publisher).execute(
+        order_id=OrderId(accepted.orderId),
+        trace_ctx=TraceContext(trace_id=None, request_id=None),
+    )
+    assert accepted_again.status == "ACCEPTED"
+
+    ready = MarkOrderReady(order_repository=order_repository, publisher=publisher).execute(
+        order_id=OrderId(accepted.orderId),
+        trace_ctx=TraceContext(trace_id=None, request_id=None),
+    )
+    ready_again = MarkOrderReady(order_repository=order_repository, publisher=publisher).execute(
+        order_id=OrderId(ready.orderId),
+        trace_ctx=TraceContext(trace_id=None, request_id=None),
+    )
+    assert ready_again.status == "READY"
+
     with pytest.raises(AcceptTransitionError):
         AcceptOrder(order_repository=order_repository, publisher=publisher).execute(
-            order_id=OrderId(accepted.orderId),
+            order_id=OrderId(ready.orderId),
             trace_ctx=TraceContext(trace_id=None, request_id=None),
         )

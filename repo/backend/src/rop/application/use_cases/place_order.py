@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -7,8 +9,16 @@ from rop.application.dto.requests import PlaceOrderRequest
 from rop.application.dto.responses import OrderResponse
 from rop.application.mappers.event_envelope import serialize_order_event
 from rop.application.mappers.order_mapper import to_order_response
+from rop.application.metrics.order_lifecycle import record_order_status
 from rop.application.ports.publisher import EventPublisher
-from rop.application.ports.repositories import MenuRepository, OrderRepository, TableRepository
+from rop.application.ports.repositories import (
+    IdempotencyReplayMismatchError as RepoIdempotencyReplayMismatchError,
+)
+from rop.application.ports.repositories import (
+    MenuRepository,
+    OrderRepository,
+    TableRepository,
+)
 from rop.application.use_cases.context import TraceContext
 from rop.domain.common.ids import OrderId, OrderLineId, RestaurantId, TableId
 from rop.domain.common.money import Money
@@ -33,6 +43,10 @@ class MenuItemUnavailableError(Exception):
     pass
 
 
+class IdempotencyReplayMismatchError(Exception):
+    pass
+
+
 class PlaceOrder:
     def __init__(
         self,
@@ -52,6 +66,7 @@ class PlaceOrder:
         table_id: TableId,
         request_dto: PlaceOrderRequest,
         trace_ctx: TraceContext,
+        idempotency_key: str | None = None,
     ) -> OrderResponse:
         table = self._table_repository.get(table_id=table_id, restaurant_id=restaurant_id)
         if table is None:
@@ -97,32 +112,56 @@ class PlaceOrder:
             )
 
         now = datetime.now(timezone.utc)
+        payload_hash = _request_hash(request_dto)
         order = create_placed_order(
             order_id=OrderId(f"ord_{uuid4().hex[:12]}"),
             restaurant_id=restaurant_id,
             table_id=table_id,
             lines=order_lines,
             now=now,
+            idempotency_key=idempotency_key,
+            idempotency_hash=payload_hash if idempotency_key else None,
         )
-        self._order_repository.add(order)
+        created = True
+        persisted_order = order
+        if idempotency_key:
+            try:
+                persisted_order = self._order_repository.add_with_idempotency(
+                    order=order,
+                    key=idempotency_key,
+                    payload_hash=payload_hash,
+                )
+            except RepoIdempotencyReplayMismatchError as exc:
+                raise IdempotencyReplayMismatchError(str(exc)) from exc
+            created = persisted_order.order_id == order.order_id
+        else:
+            self._order_repository.add(order)
 
-        event = OrderPlaced(
-            order_id=order.order_id,
-            restaurant_id=order.restaurant_id,
-            table_id=order.table_id,
-            total=order.total,
-            created_at=order.created_at,
-        )
-        message = serialize_order_event(
-            event_type="order.placed",
-            occurred_at=event.created_at,
-            order=order,
-            trace_id=trace_ctx.trace_id,
-            request_id=trace_ctx.request_id,
-        )
-        try:
-            self._publisher.publish(channel=f"events:{restaurant_id}", message=message)
-        except Exception:
-            pass
+        if created:
+            event = OrderPlaced(
+                order_id=persisted_order.order_id,
+                restaurant_id=persisted_order.restaurant_id,
+                table_id=persisted_order.table_id,
+                total=persisted_order.total,
+                created_at=persisted_order.created_at,
+            )
+            message = serialize_order_event(
+                event_type="order.placed",
+                occurred_at=event.created_at,
+                order=persisted_order,
+                trace_id=trace_ctx.trace_id,
+                request_id=trace_ctx.request_id,
+            )
+            record_order_status(persisted_order)
+            try:
+                self._publisher.publish(channel=f"events:{restaurant_id}", message=message)
+            except Exception:
+                pass
 
-        return to_order_response(order)
+        return to_order_response(persisted_order)
+
+
+def _request_hash(request_dto: PlaceOrderRequest) -> str:
+    normalized_payload = request_dto.model_dump(mode="json", by_alias=True, exclude_none=False)
+    canonical = json.dumps(normalized_payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
