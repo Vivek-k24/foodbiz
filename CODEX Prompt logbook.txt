@@ -1529,3 +1529,649 @@ Acceptance criteria for this doc update
   - placing an order via curl
   - confirming realtime update via dashboard
 CODEX>>
+
+<<'CODEX'
+ROP-004 v1.0 [CODEX] Implement core ordering workflow: tables + orders + kitchen status + realtime events (Redis pubsub → WebSocket) + minimal kitchen dashboard
+
+Context
+Repo state at commit 5e30cac:
+- Backend FastAPI app is running and CORS is enabled for http://localhost:5173 (web-ordering) and menu fetch is verified.
+- Menu read path + seeded restaurant/menu exists (rst_001 visible via pgAdmin and API).
+ROP-004 adds the next core capability: place an order from a table and see it update in kitchen in real time.
+
+Goal
+Backend:
+- Add Table + Order domain modules (pure domain), use cases, and persistence (Postgres).
+- Add kitchen workflow endpoints to progress order status: ACCEPTED and READY.
+- Publish domain events (order.placed / order.accepted / order.ready) via Redis pubsub.
+- Implement WebSocket gateway that subscribes to Redis channels and broadcasts events to connected clients per restaurant.
+
+Frontend:
+- Add a minimal “kitchen dashboard” React app that connects to WebSocket and shows a live order queue (Placed/Accepted/Ready).
+- Keep web-ordering app unchanged except ensuring it can place an order (minimal page/button is ok).
+
+Non-negotiables
+- Domain layer must have zero framework/DB/cache deps. No FastAPI, no Pydantic, no SQLAlchemy, no Redis in domain.
+- API routes only coordinate use cases + mapping.
+- Postgres is the source of truth; Redis is best-effort for event fanout.
+- Events have a stable envelope and include request_id + trace_id when available.
+- Keep dependencies minimal. Only add a dependency if required for WS integration tests.
+
+Acceptance criteria
+- make migrate creates tables: tables, orders, order_lines (and reuses existing restaurants/menu tables).
+- make seed ensures:
+  - rst_001 exists
+  - tbl_001 exists and is OPEN
+  - menu + items exist (existing behavior)
+- HTTP:
+  - POST /v1/restaurants/rst_001/tables/tbl_001/open -> 200 (idempotent)
+  - POST /v1/restaurants/rst_001/tables/tbl_001/orders -> 201 (creates PLACED order)
+  - POST /v1/orders/{order_id}/accept -> 200 (status ACCEPTED)
+  - POST /v1/orders/{order_id}/ready  -> 200 (status READY)
+  - GET  /v1/orders/{order_id} -> 200
+- Validations:
+  - table must be OPEN to place order (else 409)
+  - item must exist and be available (else 400)
+  - quantity >= 1 (else 400)
+  - totals calculated correctly (sum of lines)
+- Realtime:
+  - Redis publishes exactly one event per transition to channel events:rst_001
+  - WebSocket client connected to /ws?restaurant_id=rst_001&role=KITCHEN receives events within 2 seconds
+- Tests:
+  - unit tests for domain invariants + use case logic
+  - integration tests covering:
+    - placing order persists DB
+    - redis pubsub receives order.placed
+    - websocket receives order.placed broadcast
+- README updated with “Terminal 1 / Terminal 2 / Terminal 3” parallel run steps and a verification checklist (see README section below).
+
+Implementation plan (strict)
+1) Domain: Table + Order entities, statuses, invariants, and domain events (pure).
+2) Application: ports + use cases:
+   - OpenTable (idempotent)
+   - PlaceOrder
+   - AcceptOrder
+   - MarkOrderReady
+3) Infrastructure:
+   - SQLAlchemy models + repositories + Alembic migration
+   - Redis publisher adapter + async listener for WS broadcast
+4) API:
+   - routes for tables + orders + kitchen transitions
+   - WebSocket endpoint and startup background task
+5) Seed updates
+6) Tests (unit + integration)
+7) Frontend kitchen dashboard (React/Vite)
+8) Update CORS config to allow dashboard dev origin as well (5173 + dashboard port).
+
+Files to create/modify (use existing repo layout under repo/)
+
+Backend domain (pure)
+repo/backend/src/rop/domain/common/ids.py
+- add TableId, OrderId, OrderLineId (NewType(str))
+
+repo/backend/src/rop/domain/table/entities.py
+- Table(entity) + TableStatus (OPEN/CLOSED) with invariants and method ensure_open()
+
+repo/backend/src/rop/domain/order/entities.py
+- Order + OrderLine + OrderStatus (PLACED/ACCEPTED/READY)
+- factory: create_placed_order(...)
+- invariants: at least 1 line, quantities >=1, totals match sum
+
+repo/backend/src/rop/domain/order/events.py
+- dataclasses: OrderPlaced, OrderAccepted, OrderReady (pure data only)
+
+Application layer
+repo/backend/src/rop/application/ports/repositories.py
+- add protocols: TableRepository, OrderRepository (keep MenuRepository as-is)
+
+repo/backend/src/rop/application/ports/publisher.py
+- EventPublisher protocol: publish(channel:str, message:str)->None
+
+repo/backend/src/rop/application/dto/requests.py
+- Pydantic:
+  - PlaceOrderRequest(lines: [PlaceOrderLineRequest])
+  - PlaceOrderLineRequest(itemId:str, quantity:int, notes?:str|null)
+
+repo/backend/src/rop/application/dto/responses.py
+- add TableResponse, OrderResponse, OrderLineResponse (camelCase JSON)
+
+repo/backend/src/rop/application/mappers/order_mapper.py
+repo/backend/src/rop/application/mappers/table_mapper.py
+repo/backend/src/rop/application/mappers/event_envelope.py
+- event envelope:
+  { event_id, event_type, occurred_at, request_id, trace_id, restaurant_id, payload }
+
+repo/backend/src/rop/application/use_cases/open_table.py
+repo/backend/src/rop/application/use_cases/place_order.py
+repo/backend/src/rop/application/use_cases/accept_order.py
+repo/backend/src/rop/application/use_cases/mark_order_ready.py
+- each use case:
+  - loads domain entities via repos
+  - applies transition/validation
+  - persists
+  - publishes event to `events:{restaurant_id}`
+
+Infrastructure (DB + messaging)
+repo/backend/src/rop/infrastructure/db/models/table.py
+repo/backend/src/rop/infrastructure/db/models/order.py
+- SQLAlchemy:
+  tables(id, restaurant_id, status, opened_at, closed_at)
+  orders(id, restaurant_id, table_id, status, created_at, total_cents, currency)
+  order_lines(id, order_id, item_id, name, quantity, unit_price_cents, currency, line_total_cents, notes)
+
+repo/backend/src/rop/infrastructure/db/repositories/table_repo.py
+repo/backend/src/rop/infrastructure/db/repositories/order_repo.py
+- map ORM <-> domain
+- persist order + lines in one transaction
+
+repo/backend/src/rop/infrastructure/db/migrations/versions/<timestamp>_tables_orders_order_lines.py
+- Alembic migration for above
+- ensure compatibility with existing menu schema
+
+repo/backend/src/rop/infrastructure/messaging/redis_publisher.py
+- implements EventPublisher using redis client
+
+repo/backend/src/rop/infrastructure/messaging/redis_ws_fanout.py
+- async task:
+  - subscribes pattern events:*
+  - parses restaurant_id from channel name
+  - broadcasts raw JSON message to WS manager
+
+API
+repo/backend/src/rop/api/main.py
+- include new routers: tables, orders, kitchen
+- add WS route
+- startup/shutdown: start/stop redis_ws_fanout background task
+- update CORS to allow both origins:
+  - http://localhost:5173
+  - http://localhost:5174 (or whatever dashboard uses)
+  Prefer env var CORS_ALLOW_ORIGINS with default "http://localhost:5173,http://localhost:5174"
+
+repo/backend/src/rop/api/routes/tables.py
+- POST /v1/restaurants/{restaurant_id}/tables/{table_id}/open
+- GET  /v1/restaurants/{restaurant_id}/tables/{table_id}
+
+repo/backend/src/rop/api/routes/orders.py
+- POST /v1/restaurants/{restaurant_id}/tables/{table_id}/orders
+- GET  /v1/orders/{order_id}
+
+repo/backend/src/rop/api/routes/kitchen.py
+- POST /v1/orders/{order_id}/accept
+- POST /v1/orders/{order_id}/ready
+
+repo/backend/src/rop/api/ws/manager.py
+repo/backend/src/rop/api/ws/routes.py
+- /ws?restaurant_id=...&role=...
+- broadcasts events only (no client commands required day-1)
+
+Seed
+repo/backend/src/rop/tools/seed.py
+- ensure tbl_001 exists for rst_001 and is OPEN (idempotent)
+- keep existing seed content for menu
+
+Tests
+Unit
+repo/backend/tests/unit/table/test_table_domain.py
+repo/backend/tests/unit/order/test_order_domain.py
+repo/backend/tests/unit/order/test_use_cases.py
+- validate transitions + totals + validations + publisher called
+
+Integration
+repo/backend/tests/integration/test_order_flow_db.py
+- migrate + seed
+- place order -> accept -> ready
+- assert persisted states
+
+repo/backend/tests/integration/test_redis_pubsub_events.py
+- subscribe to events:rst_001
+- trigger place/accept/ready
+- assert messages with correct event_type appear
+
+repo/backend/tests/integration/test_ws_receives_events.py
+- connect WS to /ws?restaurant_id=rst_001&role=KITCHEN
+- trigger place order
+- assert WS receives order.placed
+Note: if repo does not already include a WS client lib for tests, add dev dependency `websockets` and use it only in this integration test.
+
+Frontend
+repo/frontend/apps/dashboard/...
+- create a new Vite React TS app (minimal)
+- env:
+  VITE_WS_BASE_URL=ws://localhost:8000
+- connect to WS:
+  `${VITE_WS_BASE_URL}/ws?restaurant_id=rst_001&role=KITCHEN`
+- render live queue with statuses and timestamps
+- show connection status (Connected/Disconnected)
+
+Optional minimal web-ordering change (only if not already possible)
+repo/frontend/apps/web-ordering
+- add a minimal “Place test order” button that posts to:
+  POST /v1/restaurants/rst_001/tables/tbl_001/orders
+  body: {"lines":[{"itemId":"itm_001","quantity":1}]}
+Keep it extremely small.
+
+README update (required)
+repo/README.md
+- Add “Run & Verify (ROP-004)” section with explicit parallel terminals:
+  Terminal 1: make up + migrate + seed (backend/infra)
+  Terminal 2: web-ordering dev (pnpm dev)
+  Terminal 3: dashboard dev (pnpm dev on different port)
+- Include verification checklist:
+  - curl open table
+  - curl place order
+  - curl accept/ready
+  - confirm dashboard receives events
+- Note: if dashboard uses port 5174, mention setting it explicitly (Vite --port 5174) to avoid conflict.
+
+Commands to verify (must work)
+cd repo
+make up
+make migrate
+make seed
+
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/open
+
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"lines":[{"itemId":"itm_001","quantity":1}]}'
+
+curl -i -X POST http://localhost:8000/v1/orders/<ORDER_ID>/accept
+curl -i -X POST http://localhost:8000/v1/orders/<ORDER_ID>/ready
+
+make test
+make test-integration
+make depcheck
+
+Frontend
+cd repo/frontend
+pnpm i
+pnpm --filter web-ordering dev -- --port 5173
+pnpm --filter dashboard dev -- --port 5174
+
+Deliverable summary
+- Table + Order core workflow (placed → accepted → ready)
+- DB persistence + seed
+- Redis pubsub events + WebSocket fanout
+- Kitchen dashboard displays live queue
+- README runbook with parallel terminals and verification steps
+CODEX>>
+
+<<'CODEX'
+ROP-005 v1.0 [CODEX] Kitchen queue + idempotency + request validation hardening + metrics for lifecycle
+
+Context
+ROP-004 is merged into main:
+- Tables can be opened
+- Orders can be placed
+- Kitchen can accept and mark ready
+- Redis pubsub publishes events and WS fans out to dashboard
+- Frontend web-ordering can place a test order; dashboard shows live updates
+- README runbook exists
+
+Now we need the next production-grade increment:
+1) Kitchen needs a real queue endpoint (list orders by status/time, filter by restaurant, pagination)
+2) Order transitions must be safe under retries (idempotency + optimistic concurrency)
+3) API should return clean domain errors (409/404/400) and never leak 500 for expected cases
+4) Add lifecycle metrics that help ops (counts, latency from placed→accepted→ready)
+
+Goal
+Backend:
+- Implement KitchenQueue use case + REST endpoint to list orders for a restaurant
+- Add idempotency for PlaceOrder via `Idempotency-Key` header (per table) persisted in DB
+- Add optimistic concurrency for order status updates to prevent double-accept/ready (version or updated_at check)
+- Harden error mapping: return consistent HTTP status + error codes for domain failures
+- Add key Prometheus metrics for lifecycle + queue sizes
+
+Frontend:
+- Dashboard: replace "event-only list" with a queue that hydrates initial state via REST, then applies WS events
+- Dashboard: add simple filters (status tabs: PLACED/ACCEPTED/READY)
+
+Non-negotiables
+- Domain remains pure (no FastAPI/Pydantic/SQLAlchemy/Redis)
+- API routes coordinate only
+- Infrastructure swappable via ports
+- Minimal dependencies; do not add libraries unless necessary
+
+Acceptance criteria
+Kitchen queue
+- GET /v1/restaurants/{restaurant_id}/kitchen/orders?status=PLACED&limit=50&cursor=...
+  returns newest-first by created_at, stable pagination
+- Supports status filter: PLACED | ACCEPTED | READY | (optional ALL)
+- Supports limit (default 50, max 200)
+- Cursor is opaque (string) but implemented as created_at + order_id tuple (or similar)
+
+Idempotency
+- POST /v1/restaurants/{restaurant_id}/tables/{table_id}/orders accepts optional header:
+  Idempotency-Key: <string>
+- If same key is used again for same restaurant+table with identical request body:
+  return 201 with the original created order (no duplicate rows)
+- If same key is reused with a different body:
+  return 409 with error code IDEMPOTENCY_KEY_REPLAY_DIFFERENT_PAYLOAD
+
+Concurrency safety
+- Accept/Ready endpoints must be safe under retries / double clicks:
+  - If order already ACCEPTED, accept returns 200 with current resource (idempotent)
+  - If order already READY, ready returns 200 with current resource (idempotent)
+  - Invalid transition returns 409 with error code INVALID_ORDER_TRANSITION
+- Use optimistic concurrency:
+  - Add integer `version` column on orders (default 1), increment on each status change
+  - Update uses WHERE id=:id AND version=:expected_version to ensure single writer
+  - If conflict, re-read and return current order (or 409 with CONFLICT)
+
+Error mapping
+- Define a consistent error response:
+  { "error": { "code": "...", "message": "...", "details": {...} }, "requestId": "..." }
+- Ensure all expected domain errors are mapped (no 500)
+
+Metrics
+- Add Prometheus gauges/counters:
+  - rop_orders_total{restaurant_id,status}
+  - rop_order_transition_total{from,to}
+  - rop_order_time_to_accept_seconds (histogram)
+  - rop_order_time_to_ready_seconds (histogram)
+- Update metrics on transition (prefer application layer, not API layer)
+
+Implementation details (follow strictly)
+
+1) DB schema
+repo/backend/src/rop/infrastructure/db/models/order.py
+- Add columns to orders:
+  - version INT NOT NULL DEFAULT 1
+  - idempotency_key VARCHAR NULL
+  - idempotency_hash VARCHAR NULL (sha256 of normalized request)
+- Add unique constraint:
+  - UNIQUE(restaurant_id, table_id, idempotency_key) WHERE idempotency_key IS NOT NULL
+  (If partial unique not available easily, emulate with standard unique and allow NULLs.)
+
+repo/backend/src/rop/infrastructure/db/migrations/versions/<ts>_order_idempotency_and_version.py
+- Alembic migration adding columns + indexes/constraints
+
+2) Application ports & use cases
+repo/backend/src/rop/application/ports/repositories.py
+- Extend OrderRepository:
+  - list_for_kitchen(restaurant_id, status, limit, cursor) -> (orders, next_cursor)
+  - get_by_idempotency(restaurant_id, table_id, key) -> Order|None
+  - add_with_idempotency(order, key, hash) -> Order (returns created or existing)
+  - update_status_with_version(order_id, new_status, expected_version) -> Order (or raises conflict)
+
+repo/backend/src/rop/application/use_cases/kitchen_queue.py
+- Executes list query and maps to response
+
+repo/backend/src/rop/application/use_cases/place_order.py
+- Accept idempotency_key + computed hash (stable canonicalization of body)
+- If replay with different hash -> raise IdempotencyReplayMismatch
+
+repo/backend/src/rop/application/use_cases/accept_order.py
+repo/backend/src/rop/application/use_cases/mark_order_ready.py
+- Perform optimistic concurrency update with version
+- If conflict, re-read and return current or raise ConflictError
+
+3) Infra repositories
+repo/backend/src/rop/infrastructure/db/repositories/order_repo.py
+- Implement list_for_kitchen with stable pagination
+- Implement idempotency lookup + create semantics
+- Implement versioned update for status transitions
+
+4) API routes
+repo/backend/src/rop/api/routes/kitchen.py
+- Add GET /v1/restaurants/{restaurant_id}/kitchen/orders
+- Add query params: status, limit, cursor
+
+repo/backend/src/rop/api/routes/orders.py
+- Update POST place order to read Idempotency-Key header and pass into use case
+- Ensure error responses are consistent
+
+repo/backend/src/rop/api/error_handling.py (new)
+- Centralize exception-to-HTTP mapping
+- Add FastAPI exception handlers for known domain/app errors
+
+5) Frontend dashboard
+repo/frontend/apps/dashboard/src/App.tsx
+- On load:
+  - fetch initial queue via REST endpoint (PLACED default)
+  - connect WS and apply events to update list
+- Add status tabs: PLACED / ACCEPTED / READY
+- Show count of orders in current tab
+
+6) Tests
+Unit:
+- idempotency: same key same payload returns same order id
+- mismatch: same key diff payload returns 409 code
+- transition idempotency: accept twice returns ACCEPTED without error
+- invalid transition: ready from PLACED returns 409
+
+Integration:
+- POST place order with Idempotency-Key twice -> only 1 DB row
+- Concurrency test: simulate two accept calls with same expected_version; only one increments version
+- Kitchen queue endpoint returns correct ordering and pagination
+
+Commands to verify
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m rop.tools.seed
+
+curl.exe -i "http://localhost:8000/v1/restaurants/rst_001/kitchen/orders?status=PLACED&limit=10"
+
+# Idempotency
+curl.exe -i -X POST "http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/orders" ^
+  -H "Content-Type: application/json" ^
+  -H "Idempotency-Key: test-key-001" ^
+  -d "{\"lines\":[{\"itemId\":\"itm_001\",\"quantity\":1}]}"
+curl.exe -i -X POST "http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/orders" ^
+  -H "Content-Type: application/json" ^
+  -H "Idempotency-Key: test-key-001" ^
+  -d "{\"lines\":[{\"itemId\":\"itm_001\",\"quantity\":1}]}"
+
+pytest -q backend/tests/unit
+pytest -q backend/tests/integration
+CODEX>>
+<<'CODEX'
+ROP-006 v1.0 [CODEX] Table order history + close-table + UI re-hydration
+
+Repository
+repo is a monorepo under ./repo
+backend is ./repo/backend (FastAPI, clean architecture boundaries)
+frontend is ./repo/frontend (apps/dashboard and apps/web-ordering)
+observability and infra are via docker-compose at ./repo/docker-compose.yml
+current capabilities include: open table, place order (idempotency), kitchen queue (REST + cursor), accept/ready transitions (idempotent + optimistic concurrency), WS fanout via Redis, metrics, error envelope
+
+Problem to solve
+After refresh, UIs can lose state unless they can re-hydrate from REST.
+Kitchen queue already hydrates via REST, but table-specific views do not have a “list all orders for this table” endpoint.
+We also need a first-class “close table” action with a receipt-like summary, so the workflow can end cleanly.
+
+Goal
+Implement table-scoped order history + table close workflow end-to-end:
+1) Backend: list orders for a table (REST) with pagination/cursor
+2) Backend: close a table with business guardrails + emit event
+3) Backend: table summary endpoint (receipt-style totals + counts)
+4) Frontend: hydrate from REST on load, then apply WS events
+5) Tests: unit + integration coverage for listing, close rules, and WS propagation
+6) README: add runbook steps to verify this slice (parallel terminals where needed)
+
+Backend requirements
+
+A) Table order listing endpoint
+Add endpoint:
+GET /v1/restaurants/{restaurant_id}/tables/{table_id}/orders?status=ALL|PLACED|ACCEPTED|READY&limit=50&cursor=<opaque>
+
+Behavior:
+- Returns orders for that restaurant_id + table_id, newest-first (created_at desc, id desc).
+- Supports status filter with same semantics as kitchen queue.
+- Supports limit 1..200.
+- Supports opaque cursor like kitchen queue. Cursor must be URL-safe.
+- Response shape:
+{
+  "orders": [OrderResponse...],
+  "nextCursor": "string|null"
+}
+
+Implementation notes:
+- Add a new use case in rop/application/use_cases/table_orders.py (or similar).
+- Extend OrderRepository port with list_for_table(restaurant_id, table_id, status, limit, cursor).
+- Implement in SqlAlchemyOrderRepository similarly to list_for_kitchen, reusing cursor encode/decode but scoped by table_id.
+- Add a new FastAPI router file rop/api/routes/table_orders.py OR extend existing tables router cleanly (prefer separate router file for clarity).
+
+B) Close table workflow
+Add endpoint:
+POST /v1/restaurants/{restaurant_id}/tables/{table_id}/close
+
+Rules (keep minimal but safe):
+- Table must exist and be OPEN.
+- Table can only be CLOSED if there are no orders in PLACED or ACCEPTED for that table (i.e., all orders are READY) OR there are zero orders.
+- On success:
+  - Update table status to CLOSED with closed_at=now.
+  - Return TableResponse (existing DTO) plus optionally a lightweight receipt summary (see section C).
+  - Publish WS event "table.closed" on events:{restaurant_id} (same event envelope pattern used for orders).
+
+Domain updates:
+- Extend rop/domain/table/entities.py: add close(now) method that transitions OPEN->CLOSED, sets closed_at, and errors if already closed.
+- Add a domain error for invalid close conditions if needed (but keep domain pure and simple).
+
+Application layer:
+- Add use case CloseTable that:
+  - loads table
+  - validates open
+  - queries order repo for non-ready orders count (or lists with status IN [PLACED, ACCEPTED] with limit=1)
+  - closes and persists table
+  - publishes event via EventPublisher (same approach as order events)
+  - records metrics
+
+Infrastructure:
+- Extend SqlAlchemyTableRepository to persist close state if not already available.
+
+C) Table summary (receipt-style)
+Add endpoint:
+GET /v1/restaurants/{restaurant_id}/tables/{table_id}/summary
+
+Response (new DTO):
+{
+  "tableId": "...",
+  "restaurantId": "...",
+  "status": "OPEN|CLOSED",
+  "openedAt": "...",
+  "closedAt": "...|null",
+  "totals": {
+    "currency": "USD",
+    "amountCents": <sum of all orders total_cents for this table>
+  },
+  "counts": {
+    "ordersTotal": N,
+    "placed": N,
+    "accepted": N,
+    "ready": N
+  },
+  "lastOrderAt": "...|null"
+}
+
+Implementation:
+- Add a repository method that can compute these aggregates efficiently (SQL aggregate) OR implement by listing orders with a reasonable cap in dev; prefer SQL aggregate for correctness and performance, but keep code minimal.
+- Add unit tests for mapping and integration tests for aggregate correctness.
+
+D) Realtime events
+- Reuse the existing event envelope mapper (event_id, event_type, occurred_at, request_id, trace_id, restaurant_id, payload).
+- Add a new event type:
+  - "table.closed" with payload containing tableId, restaurantId, status, closedAt
+- Ensure dashboard/web-ordering can consume it safely (unknown events should be ignored gracefully).
+
+E) Metrics
+Add minimal new metrics in rop/application/metrics:
+- rop_tables_closed_total{restaurant_id} counter
+- rop_table_close_blocked_total{restaurant_id,reason} counter (reason could be "HAS_NON_READY_ORDERS")
+- rop_table_total_cents histogram or gauge is optional; keep minimal if too much
+Keep metric naming consistent with existing rop_* metrics.
+
+F) Error handling consistency
+Use the centralized error envelope system introduced in ROP-005:
+- Invalid status/cursor/limit => 400 with consistent code
+- Close blocked due to non-ready orders => 409 with code TABLE_CLOSE_BLOCKED
+- Table not found => 404 with code TABLE_NOT_FOUND
+
+Frontend requirements
+
+Dashboard (frontend/apps/dashboard):
+- On load:
+  - Continue hydrating the kitchen queue via REST (existing behavior).
+- Add a table-focused view for debugging (minimal):
+  - Input box for table_id (default tbl_001) and a “Load Table Orders” button OR auto-load for tbl_001.
+  - Call GET /v1/restaurants/rst_001/tables/{table_id}/orders?status=ALL&limit=50
+  - Render list with orderId, status, total, createdAt
+  - Keep applying WS events to update the list
+- Add a “Close Table” button for the selected table:
+  - Calls POST /v1/restaurants/rst_001/tables/{table_id}/close
+  - On success, show updated table status and summary (call summary endpoint or use returned payload)
+
+Web-ordering (frontend/apps/web-ordering):
+- Add a small “My Table Orders” panel:
+  - On load, call GET /v1/restaurants/rst_001/tables/tbl_001/orders?status=ALL&limit=50
+  - Render statuses and totals
+  - Apply WS events for order transitions
+  - Do not crash if payload fields are missing; add defensive rendering for MoneyResponse
+
+Backend + Frontend should share the same base URL and use env vars already used in the repo (do not invent a new config system).
+
+Tests
+
+Backend unit tests:
+- list_for_table status filter validation
+- cursor encode/decode path
+- CloseTable rules: success when all READY, blocked when any PLACED/ACCEPTED
+
+Backend integration tests:
+- Seed, open table, place order, accept, ready, then:
+  - GET table orders returns the order and correct nextCursor behavior
+  - POST close table succeeds only after READY
+  - GET table summary returns correct totals and counts
+- WS integration:
+  - Ensure table.closed event is published and received by WS client (extend existing ws tests)
+
+README update
+Update README.md with:
+- Parallel terminals instructions:
+  - Terminal A: docker compose up ...
+  - Terminal B: pnpm dev for dashboard
+  - Terminal C (optional): pnpm dev for web-ordering
+- Verification checklist for ROP-006:
+  - migrate + seed
+  - open table
+  - place order
+  - accept + ready
+  - refresh dashboard and confirm orders re-hydrate via REST
+  - list table orders endpoint returns expected payload
+  - close table endpoint behavior (blocked until ready; then success)
+  - summary endpoint shows totals
+Include exact commands and URLs.
+
+Dependency discipline
+Do not add heavy new dependencies.
+Backend: use existing libs already present (FastAPI, SQLAlchemy, Pydantic, Redis client, OpenTelemetry stack).
+Frontend: do not add state management libraries; keep it simple with React state/hooks.
+
+Deliverables checklist
+- New/updated backend domain code for table closing
+- New use cases: list table orders, close table, get table summary
+- Repository port updates + SQLAlchemy implementations
+- New API routes + included in app composition
+- New/updated DTOs
+- Metrics
+- Tests (unit + integration)
+- Frontend updates (dashboard + web-ordering)
+- README runbook
+
+After implementing
+Run and report results for:
+ruff check backend
+ruff format --check backend
+mypy backend
+pytest -q backend/tests/unit
+pytest -q backend/tests/integration
+depcheck.py
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m rop.tools.seed
+Then verify endpoints:
+GET /v1/restaurants/rst_001/tables/tbl_001/orders?status=ALL&limit=10
+POST /v1/restaurants/rst_001/tables/tbl_001/close
+GET /v1/restaurants/rst_001/tables/tbl_001/summary
+Confirm UI survives refresh and shows the hydrated orders.
+CODEX>>

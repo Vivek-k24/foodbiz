@@ -40,10 +40,22 @@ TABLES_CLOSED_TOTAL = Counter(
     ["restaurant_id"],
 )
 
+TABLES_OPENED_TOTAL = Counter(
+    "rop_tables_opened_total",
+    "Total number of tables opened.",
+    ["restaurant_id"],
+)
+
 TABLE_CLOSE_BLOCKED_TOTAL = Counter(
     "rop_table_close_blocked_total",
     "Total number of blocked table close attempts.",
     ["restaurant_id", "reason"],
+)
+
+TABLES_LIST_REQUESTS_TOTAL = Counter(
+    "rop_tables_list_requests_total",
+    "Total number of table registry list requests.",
+    ["restaurant_id", "status"],
 )
 
 
@@ -76,5 +88,13 @@ def record_table_closed(restaurant_id: str) -> None:
     TABLES_CLOSED_TOTAL.labels(restaurant_id=restaurant_id).inc()
 
 
+def record_table_opened(restaurant_id: str) -> None:
+    TABLES_OPENED_TOTAL.labels(restaurant_id=restaurant_id).inc()
+
+
 def record_table_close_blocked(restaurant_id: str, reason: str) -> None:
     TABLE_CLOSE_BLOCKED_TOTAL.labels(restaurant_id=restaurant_id, reason=reason).inc()
+
+
+def record_tables_list_request(restaurant_id: str, status: str) -> None:
+    TABLES_LIST_REQUESTS_TOTAL.labels(restaurant_id=restaurant_id, status=status).inc()

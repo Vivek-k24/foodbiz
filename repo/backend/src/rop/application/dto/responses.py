@@ -82,3 +82,19 @@ class TableSummaryResponse(BaseModel):
     totals: MoneyResponse
     counts: TableSummaryCountsResponse
     lastOrderAt: datetime | None = None
+
+
+class TableRegistryItemResponse(BaseModel):
+    tableId: str
+    restaurantId: str
+    status: str
+    openedAt: datetime | None = None
+    closedAt: datetime | None = None
+    lastOrderAt: datetime | None = None
+    totals: MoneyResponse
+    counts: TableSummaryCountsResponse
+
+
+class TableRegistryResponse(BaseModel):
+    tables: list[TableRegistryItemResponse] = Field(default_factory=list)
+    nextCursor: str | None = None

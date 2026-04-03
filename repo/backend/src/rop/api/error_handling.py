@@ -20,6 +20,11 @@ from rop.application.use_cases.kitchen_queue import (
     InvalidKitchenQueueCursorError,
     InvalidKitchenQueueStatusError,
 )
+from rop.application.use_cases.list_tables import (
+    InvalidTableRegistryCursorError,
+    InvalidTableRegistryStatusError,
+    RestaurantNotFoundError,
+)
 from rop.application.use_cases.mark_order_ready import (
     InvalidOrderTransitionError as ReadyInvalidOrderTransitionError,
 )
@@ -137,6 +142,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         (ReadyOrderConflictError, 409, "CONFLICT"),
         (InvalidKitchenQueueStatusError, 400, "INVALID_KITCHEN_QUEUE_STATUS"),
         (InvalidKitchenQueueCursorError, 400, "INVALID_KITCHEN_QUEUE_CURSOR"),
+        (InvalidTableRegistryStatusError, 400, "INVALID_TABLE_REGISTRY_STATUS"),
+        (InvalidTableRegistryCursorError, 400, "INVALID_TABLE_REGISTRY_CURSOR"),
+        (RestaurantNotFoundError, 404, "RESTAURANT_NOT_FOUND"),
         (InvalidTableOrdersStatusError, 400, "INVALID_TABLE_ORDERS_STATUS"),
         (InvalidTableOrdersCursorError, 400, "INVALID_TABLE_ORDERS_CURSOR"),
     ]

@@ -25,7 +25,10 @@ def _current_trace_id() -> str | None:
 
 
 def _open_table_use_case() -> OpenTable:
-    return OpenTable(table_repository=SqlAlchemyTableRepository())
+    return OpenTable(
+        table_repository=SqlAlchemyTableRepository(),
+        publisher=RedisEventPublisher(),
+    )
 
 
 def _get_table_use_case() -> GetTable:
@@ -52,6 +55,7 @@ def open_table(restaurant_id: str, table_id: str) -> TableResponse:
     payload = _open_table_use_case().execute(
         restaurant_id=RestaurantId(restaurant_id),
         table_id=TableId(table_id),
+        trace_ctx=TraceContext(trace_id=_current_trace_id(), request_id=get_request_id()),
     )
     return payload
 
