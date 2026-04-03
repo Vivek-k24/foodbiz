@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 type MoneyPayload = {
-  amountCents?: number;
-  currency?: string;
+  amountCents?: number | null;
+  currency?: string | null;
 };
 
 type OrderLinePayload = {
@@ -14,8 +14,10 @@ type OrderLinePayload = {
 
 type OrderPayload = {
   orderId: string;
+  restaurantId?: string;
   tableId: string;
   status: string;
+  total?: MoneyPayload | null;
   totalMoney?: MoneyPayload | null;
   createdAt: string;
   lines: OrderLinePayload[];
@@ -42,10 +44,7 @@ type TableSummaryResponse = {
   status: string;
   openedAt: string | null;
   closedAt: string | null;
-  totals: {
-    amountCents: number;
-    currency: string;
-  };
+  totals: MoneyPayload;
   counts: {
     ordersTotal: number;
     placed: number;
@@ -62,10 +61,7 @@ type TableRegistryItem = {
   openedAt: string | null;
   closedAt: string | null;
   lastOrderAt: string | null;
-  totals: {
-    amountCents: number;
-    currency: string;
-  };
+  totals: MoneyPayload;
   counts: {
     ordersTotal: number;
     placed: number;
@@ -79,18 +75,27 @@ type TableRegistryResponse = {
   nextCursor: string | null;
 };
 
+type ApiErrorResponse = {
+  error?: {
+    code?: string;
+    message?: string;
+  };
+};
+
+type ApiError = {
+  code: string | null;
+  message: string;
+};
+
 type StatusTab = "PLACED" | "ACCEPTED" | "READY";
 type TablesFilter = "ALL" | "OPEN" | "CLOSED";
 type DashboardView = "KITCHEN" | "TABLES";
+type TableAction = "open" | "place" | "close" | null;
 
 const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
-function formatMoney(amountCents: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amountCents / 100);
-}
-
-function formatTime(value: string | null | undefined): string {
+function formatTimestamp(value: string | null | undefined): string {
   if (!value) {
     return "-";
   }
@@ -98,73 +103,137 @@ function formatTime(value: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleTimeString();
+  return date.toLocaleString();
 }
 
-function formatOrderTotal(total: MoneyPayload | null | undefined): string {
-  if (!total || typeof total.amountCents !== "number" || !total.currency) {
+function formatMoneyValue(money: MoneyPayload | null | undefined): string {
+  if (!money || typeof money.amountCents !== "number" || typeof money.currency !== "string") {
     return "-";
   }
-  return formatMoney(total.amountCents, total.currency);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: money.currency,
+  }).format(money.amountCents / 100);
 }
 
-async function readErrorMessage(response: Response): Promise<string> {
+function getOrderMoney(order: OrderPayload): MoneyPayload | null | undefined {
+  return order.totalMoney ?? order.total;
+}
+
+function normalizeOrder(order: OrderPayload): OrderPayload {
+  return {
+    ...order,
+    lines: Array.isArray(order.lines) ? order.lines : [],
+    totalMoney: order.totalMoney ?? order.total ?? null,
+  };
+}
+
+function buildOrderFromEvent(payload: Record<string, unknown>): OrderPayload | null {
+  if (typeof payload.orderId !== "string") {
+    return null;
+  }
+  return normalizeOrder({
+    orderId: payload.orderId,
+    restaurantId: typeof payload.restaurantId === "string" ? payload.restaurantId : undefined,
+    tableId: typeof payload.tableId === "string" ? payload.tableId : "",
+    status: typeof payload.status === "string" ? payload.status : "",
+    totalMoney: payload.totalMoney as MoneyPayload | null | undefined,
+    createdAt: typeof payload.createdAt === "string" ? payload.createdAt : "",
+    lines: Array.isArray(payload.lines) ? (payload.lines as OrderLinePayload[]) : [],
+  });
+}
+
+function buildIdempotencyKey(tableId: string): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+    pad(now.getSeconds()),
+  ].join("");
+  const random = Math.random().toString(36).slice(2, 8).padEnd(6, "0");
+  return `rop8-${tableId}-${stamp}-${random}`;
+}
+
+function formatApiError(error: ApiError): string {
+  return error.code ? `${error.code}: ${error.message}` : error.message;
+}
+
+async function readApiError(response: Response): Promise<ApiError> {
   try {
-    const payload = (await response.json()) as { error?: { message?: string } };
+    const payload = (await response.json()) as ApiErrorResponse;
     if (payload.error?.message) {
-      return payload.error.message;
+      return {
+        code: payload.error.code ?? null,
+        message: payload.error.message,
+      };
     }
   } catch {
-    // ignore parsing errors
+    // Ignore malformed error payloads.
   }
-  return `request failed (${response.status})`;
+  return {
+    code: null,
+    message: `request failed (${response.status})`,
+  };
 }
 
 function App() {
   const [orders, setOrders] = useState<Record<string, OrderPayload>>({});
   const [tables, setTables] = useState<Record<string, TableRegistryItem>>({});
   const [connectionStatus, setConnectionStatus] = useState("Connecting");
-  const [activeStatus, setActiveStatus] = useState<StatusTab>("PLACED");
   const [view, setView] = useState<DashboardView>("TABLES");
+  const [activeStatus, setActiveStatus] = useState<StatusTab>("PLACED");
   const [tablesFilter, setTablesFilter] = useState<TablesFilter>("OPEN");
+  const [selectedTableId, setSelectedTableId] = useState("tbl_001");
   const [loadingQueue, setLoadingQueue] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
   const [tablesLoading, setTablesLoading] = useState(false);
   const [tablesError, setTablesError] = useState<string | null>(null);
-  const [tableId, setTableId] = useState("tbl_001");
   const [tableOrdersLoading, setTableOrdersLoading] = useState(false);
   const [tableOrdersError, setTableOrdersError] = useState<string | null>(null);
   const [tableSummary, setTableSummary] = useState<TableSummaryResponse | null>(null);
+  const [tableActionPending, setTableActionPending] = useState<TableAction>(null);
+  const [tableActionError, setTableActionError] = useState<string | null>(null);
   const [tableActionMessage, setTableActionMessage] = useState<string | null>(null);
+  const [orderActionPending, setOrderActionPending] = useState<Record<string, boolean>>({});
+  const [orderActionError, setOrderActionError] = useState<Record<string, string>>({});
 
   const kitchenQueueEndpoint = useMemo(
     () => `${apiBaseUrl}/v1/restaurants/rst_001/kitchen/orders`,
     []
   );
-
   const tableOrdersEndpoint = useMemo(
     () =>
-      `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(tableId)}/orders`,
-    [tableId]
+      `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(selectedTableId)}/orders`,
+    [selectedTableId]
   );
-
   const tableSummaryEndpoint = useMemo(
     () =>
-      `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(tableId)}/summary`,
-    [tableId]
+      `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(selectedTableId)}/summary`,
+    [selectedTableId]
   );
-
+  const tableOpenEndpoint = useMemo(
+    () => `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(selectedTableId)}/open`,
+    [selectedTableId]
+  );
   const tableCloseEndpoint = useMemo(
-    () => `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(tableId)}/close`,
-    [tableId]
+    () =>
+      `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(selectedTableId)}/close`,
+    [selectedTableId]
   );
-
+  const placeOrderEndpoint = useMemo(
+    () =>
+      `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(selectedTableId)}/orders`,
+    [selectedTableId]
+  );
   const tablesEndpoint = useMemo(
     () =>
       `${apiBaseUrl}/v1/restaurants/rst_001/tables?status=${encodeURIComponent(tablesFilter)}&limit=50`,
     [tablesFilter]
   );
-
   const wsUrl = useMemo(() => {
     const url = new URL("/ws", wsBaseUrl);
     url.searchParams.set("restaurant_id", "rst_001");
@@ -175,18 +244,37 @@ function App() {
   function mergeOrders(incoming: OrderPayload[]): void {
     setOrders((current) => {
       const next = { ...current };
-      for (const order of incoming) {
-        if (!order.orderId) {
+      for (const incomingOrder of incoming) {
+        if (!incomingOrder.orderId) {
           continue;
         }
-        next[order.orderId] = order;
+        next[incomingOrder.orderId] = normalizeOrder(incomingOrder);
       }
       return next;
     });
   }
 
+  function updateOrder(
+    orderId: string,
+    updater: (order: OrderPayload) => OrderPayload
+  ): void {
+    setOrders((current) => {
+      const existing = current[orderId];
+      if (!existing) {
+        return current;
+      }
+      return {
+        ...current,
+        [orderId]: normalizeOrder(updater(existing)),
+      };
+    });
+  }
+
   function upsertTableRow(incoming: TableRegistryItem): void {
-    setTables((current) => ({ ...current, [incoming.tableId]: incoming }));
+    setTables((current) => ({
+      ...current,
+      [incoming.tableId]: incoming,
+    }));
   }
 
   async function loadTables(): Promise<void> {
@@ -195,7 +283,7 @@ function App() {
     try {
       const response = await fetch(tablesEndpoint);
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
+        throw new Error(formatApiError(await readApiError(response)));
       }
       const payload = (await response.json()) as TableRegistryResponse;
       setTables(() => {
@@ -205,8 +293,8 @@ function App() {
         }
         return next;
       });
-    } catch (err) {
-      setTablesError(err instanceof Error ? err.message : "failed to load tables");
+    } catch (error) {
+      setTablesError(error instanceof Error ? error.message : "failed to load tables");
     } finally {
       setTablesLoading(false);
     }
@@ -218,12 +306,12 @@ function App() {
     try {
       const response = await fetch(`${kitchenQueueEndpoint}?status=${status}&limit=50`);
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
+        throw new Error(formatApiError(await readApiError(response)));
       }
       const payload = (await response.json()) as KitchenQueueResponse;
       mergeOrders(payload.orders);
-    } catch (err) {
-      setQueueError(err instanceof Error ? err.message : "failed to load kitchen queue");
+    } catch (error) {
+      setQueueError(error instanceof Error ? error.message : "failed to load kitchen queue");
     } finally {
       setLoadingQueue(false);
     }
@@ -235,12 +323,12 @@ function App() {
     try {
       const response = await fetch(`${tableOrdersEndpoint}?status=ALL&limit=50`);
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
+        throw new Error(formatApiError(await readApiError(response)));
       }
       const payload = (await response.json()) as TableOrdersResponse;
       mergeOrders(payload.orders);
-    } catch (err) {
-      setTableOrdersError(err instanceof Error ? err.message : "failed to load table orders");
+    } catch (error) {
+      setTableOrdersError(error instanceof Error ? error.message : "failed to load table orders");
     } finally {
       setTableOrdersLoading(false);
     }
@@ -250,7 +338,7 @@ function App() {
     try {
       const response = await fetch(tableSummaryEndpoint);
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
+        throw new Error(formatApiError(await readApiError(response)));
       }
       const payload = (await response.json()) as TableSummaryResponse;
       setTableSummary(payload);
@@ -268,54 +356,156 @@ function App() {
             closedAt: payload.closedAt,
             lastOrderAt: payload.lastOrderAt,
             totals: payload.totals,
-            counts: payload.counts
-          }
+            counts: payload.counts,
+          },
         };
       });
-    } catch (err) {
+    } catch {
       setTableSummary(null);
-      setTableActionMessage(err instanceof Error ? err.message : "failed to load table summary");
+    }
+  }
+
+  async function refreshSelectedTable(): Promise<void> {
+    await Promise.all([loadTableOrders(), loadTableSummary()]);
+  }
+
+  async function handleOrderAction(
+    order: OrderPayload,
+    action: "accept" | "ready"
+  ): Promise<void> {
+    const nextStatus = action === "accept" ? "ACCEPTED" : "READY";
+    const previousStatus = order.status;
+
+    setOrderActionPending((current) => ({ ...current, [order.orderId]: true }));
+    setOrderActionError((current) => {
+      const next = { ...current };
+      delete next[order.orderId];
+      return next;
+    });
+    updateOrder(order.orderId, (current) => ({ ...current, status: nextStatus }));
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/orders/${order.orderId}/${action}`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const apiError = await readApiError(response);
+        updateOrder(order.orderId, (current) => ({ ...current, status: previousStatus }));
+        setOrderActionError((current) => ({
+          ...current,
+          [order.orderId]: formatApiError(apiError),
+        }));
+        if (apiError.code === "INVALID_ORDER_TRANSITION" || apiError.code === "CONFLICT") {
+          await loadKitchenQueue(activeStatus);
+          if (order.tableId === selectedTableId) {
+            await refreshSelectedTable();
+          }
+        }
+        return;
+      }
+
+      const payload = (await response.json()) as OrderPayload;
+      mergeOrders([payload]);
+      if (order.tableId === selectedTableId) {
+        void loadTableSummary();
+      }
+      void loadTables();
+    } finally {
+      setOrderActionPending((current) => ({ ...current, [order.orderId]: false }));
+    }
+  }
+
+  async function openTable(): Promise<void> {
+    setTableActionPending("open");
+    setTableActionError(null);
+    setTableActionMessage(null);
+    try {
+      const response = await fetch(tableOpenEndpoint, { method: "POST" });
+      if (!response.ok) {
+        setTableActionError(formatApiError(await readApiError(response)));
+        return;
+      }
+      setTableActionMessage(`Opened table ${selectedTableId}`);
+      await Promise.all([loadTables(), refreshSelectedTable()]);
+    } finally {
+      setTableActionPending(null);
+    }
+  }
+
+  async function placeTestOrder(): Promise<void> {
+    setTableActionPending("place");
+    setTableActionError(null);
+    setTableActionMessage(null);
+    try {
+      const response = await fetch(placeOrderEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": buildIdempotencyKey(selectedTableId),
+        },
+        body: JSON.stringify({
+          lines: [{ itemId: "itm_001", quantity: 1 }],
+        }),
+      });
+      if (!response.ok) {
+        setTableActionError(formatApiError(await readApiError(response)));
+        return;
+      }
+      const payload = (await response.json()) as OrderPayload;
+      mergeOrders([payload]);
+      setTableActionMessage(`Placed test order for ${selectedTableId}`);
+      await Promise.all([refreshSelectedTable(), loadTables()]);
+    } finally {
+      setTableActionPending(null);
     }
   }
 
   async function closeTable(): Promise<void> {
+    setTableActionPending("close");
+    setTableActionError(null);
     setTableActionMessage(null);
-    const response = await fetch(tableCloseEndpoint, { method: "POST" });
-    if (!response.ok) {
-      setTableActionMessage(await readErrorMessage(response));
-      return;
+    try {
+      const response = await fetch(tableCloseEndpoint, { method: "POST" });
+      if (!response.ok) {
+        setTableActionError(formatApiError(await readApiError(response)));
+        return;
+      }
+      setTableActionMessage(`Closed table ${selectedTableId}`);
+      await Promise.all([loadTables(), refreshSelectedTable()]);
+    } finally {
+      setTableActionPending(null);
     }
-    setTableActionMessage(`Closed table ${tableId}`);
-    await loadTableSummary();
   }
 
   const kitchenQueue = useMemo(
     () =>
       Object.values(orders)
         .filter((order) => order.status === activeStatus)
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
     [activeStatus, orders]
   );
 
   const selectedTableOrders = useMemo(
     () =>
       Object.values(orders)
-        .filter((order) => order.tableId === tableId)
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-    [orders, tableId]
+        .filter((order) => order.tableId === selectedTableId)
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+    [orders, selectedTableId]
   );
 
   const tablesList = useMemo(
     () =>
-      Object.values(tables).sort((a, b) => {
-        const left = a.openedAt ? new Date(a.openedAt).getTime() : 0;
-        const right = b.openedAt ? new Date(b.openedAt).getTime() : 0;
-        if (left !== right) {
-          return right - left;
-        }
-        return b.tableId.localeCompare(a.tableId);
-      }),
-    [tables]
+      Object.values(tables)
+        .filter((row) => tablesFilter === "ALL" || row.status === tablesFilter)
+        .sort((left, right) => {
+          const leftOpened = left.openedAt ? new Date(left.openedAt).getTime() : 0;
+          const rightOpened = right.openedAt ? new Date(right.openedAt).getTime() : 0;
+          if (leftOpened !== rightOpened) {
+            return rightOpened - leftOpened;
+          }
+          return right.tableId.localeCompare(left.tableId);
+        }),
+    [tables, tablesFilter]
   );
 
   useEffect(() => {
@@ -327,10 +517,10 @@ function App() {
   }, [tablesEndpoint]);
 
   useEffect(() => {
+    setTableActionError(null);
     setTableActionMessage(null);
-    void loadTableOrders();
-    void loadTableSummary();
-  }, [tableId, tableOrdersEndpoint, tableSummaryEndpoint]);
+    void refreshSelectedTable();
+  }, [selectedTableId, tableOrdersEndpoint, tableSummaryEndpoint]);
 
   useEffect(() => {
     const socket = new WebSocket(wsUrl);
@@ -339,84 +529,67 @@ function App() {
     socket.onerror = () => setConnectionStatus("Disconnected");
     socket.onmessage = (event) => {
       try {
-        const parsed = JSON.parse(event.data) as EventEnvelope;
-        const payload = parsed.payload as Record<string, unknown> | undefined;
-        if (payload && typeof payload.orderId === "string") {
-          const payloadTableId = String(payload.tableId ?? "");
-          const payloadCreatedAt = String(payload.createdAt ?? "");
-          mergeOrders([
-            {
-              orderId: payload.orderId,
-              tableId: payloadTableId,
-              status: String(payload.status ?? ""),
-              totalMoney: payload.totalMoney as MoneyPayload | null | undefined,
-              createdAt: payloadCreatedAt,
-              lines: Array.isArray(payload.lines) ? (payload.lines as OrderLinePayload[]) : []
-            }
-          ]);
-          if (payloadTableId) {
+        const envelope = JSON.parse(event.data) as EventEnvelope;
+        const payload = envelope.payload;
+        if (!payload) {
+          return;
+        }
+
+        const order = buildOrderFromEvent(payload);
+        if (order) {
+          mergeOrders([order]);
+          if (order.tableId === selectedTableId) {
+            void loadTableSummary();
+          }
+          if (order.tableId) {
             setTables((current) => {
-              const row = current[payloadTableId];
+              const row = current[order.tableId];
               if (!row) {
                 return current;
               }
               return {
                 ...current,
-                [payloadTableId]: {
+                [order.tableId]: {
                   ...row,
-                  lastOrderAt: payloadCreatedAt || row.lastOrderAt
-                }
+                  lastOrderAt: order.createdAt || row.lastOrderAt,
+                },
               };
             });
           }
           return;
         }
-        if (
-          parsed.event_type === "table.opened" &&
-          payload &&
-          typeof payload.tableId === "string"
-        ) {
+
+        if (envelope.event_type === "table.opened" && typeof payload.tableId === "string") {
           upsertTableRow({
             tableId: payload.tableId,
-            restaurantId: String(payload.restaurantId ?? "rst_001"),
+            restaurantId: typeof payload.restaurantId === "string" ? payload.restaurantId : "rst_001",
             status: "OPEN",
-            openedAt: String(payload.openedAt ?? ""),
+            openedAt: typeof payload.openedAt === "string" ? payload.openedAt : null,
             closedAt: null,
             lastOrderAt: null,
             totals: { amountCents: 0, currency: "USD" },
-            counts: { ordersTotal: 0, placed: 0, accepted: 0, ready: 0 }
+            counts: { ordersTotal: 0, placed: 0, accepted: 0, ready: 0 },
           });
-          if (tablesFilter === "OPEN" || tablesFilter === "ALL") {
-            void loadTables();
-          }
           return;
         }
-        if (
-          parsed.event_type === "table.closed" &&
-          payload &&
-          typeof payload.tableId === "string"
-        ) {
-          const payloadTableId = payload.tableId;
+
+        if (envelope.event_type === "table.closed" && typeof payload.tableId === "string") {
           setTables((current) => {
-            const row = current[payloadTableId];
+            const row = current[payload.tableId];
             if (!row) {
               return current;
             }
             return {
               ...current,
-              [payloadTableId]: {
+              [payload.tableId]: {
                 ...row,
                 status: "CLOSED",
-                closedAt: String(payload.closedAt ?? row.closedAt)
-              }
+                closedAt: typeof payload.closedAt === "string" ? payload.closedAt : row.closedAt,
+              },
             };
           });
-          if (payloadTableId === tableId) {
-            setTableActionMessage(`Table ${tableId} closed`);
+          if (payload.tableId === selectedTableId) {
             void loadTableSummary();
-          }
-          if (tablesFilter === "CLOSED" || tablesFilter === "ALL") {
-            void loadTables();
           }
         }
       } catch {
@@ -424,7 +597,7 @@ function App() {
       }
     };
     return () => socket.close();
-  }, [tableId, tablesFilter, wsUrl]);
+  }, [selectedTableId, wsUrl]);
 
   return (
     <main style={{ fontFamily: "sans-serif", padding: 16 }}>
@@ -442,7 +615,7 @@ function App() {
               color: view === label ? "#ffffff" : "#111827",
               border: "1px solid #d1d5db",
               padding: "6px 10px",
-              cursor: "pointer"
+              cursor: "pointer",
             }}
           >
             {label}
@@ -464,7 +637,7 @@ function App() {
                   color: activeStatus === status ? "#ffffff" : "#111827",
                   border: "1px solid #d1d5db",
                   padding: "6px 10px",
-                  cursor: "pointer"
+                  cursor: "pointer",
                 }}
               >
                 {status}
@@ -475,23 +648,49 @@ function App() {
           {loadingQueue ? <p>Loading queue...</p> : null}
           {queueError ? <p>Queue error: {queueError}</p> : null}
           <ul>
-            {kitchenQueue.map((order) => (
-              <li key={order.orderId} style={{ marginBottom: 12 }}>
-                <div>
-                  <strong>{order.orderId}</strong> | table {order.tableId}
-                </div>
-                <div>Status: {order.status}</div>
-                <div>{formatOrderTotal(order.totalMoney)}</div>
-                <div>{order.lines.map((line) => `${line.quantity}x ${line.name}`).join(", ")}</div>
-                <div>Created: {formatTime(order.createdAt)}</div>
-              </li>
-            ))}
+            {kitchenQueue.map((order) => {
+              const isPending = orderActionPending[order.orderId] === true;
+              const errorMessage = orderActionError[order.orderId];
+
+              return (
+                <li key={order.orderId} style={{ marginBottom: 14 }}>
+                  <div>
+                    <strong>{order.orderId}</strong> | table {order.tableId}
+                  </div>
+                  <div>Status: {order.status}</div>
+                  <div>{formatMoneyValue(getOrderMoney(order))}</div>
+                  <div>{order.lines.map((line) => `${line.quantity}x ${line.name}`).join(", ")}</div>
+                  <div>Created: {formatTimestamp(order.createdAt)}</div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                    {order.status === "PLACED" ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleOrderAction(order, "accept")}
+                        disabled={isPending}
+                      >
+                        {isPending ? "Accepting..." : "Accept"}
+                      </button>
+                    ) : null}
+                    {order.status === "ACCEPTED" ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleOrderAction(order, "ready")}
+                        disabled={isPending}
+                      >
+                        {isPending ? "Updating..." : "Mark Ready"}
+                      </button>
+                    ) : null}
+                  </div>
+                  {errorMessage ? <p>{errorMessage}</p> : null}
+                </li>
+              );
+            })}
           </ul>
         </section>
       ) : (
         <section style={{ marginBottom: 24 }}>
           <h2>Tables</h2>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
             {(["OPEN", "CLOSED", "ALL"] as const).map((status) => (
               <button
                 key={status}
@@ -502,7 +701,7 @@ function App() {
                   color: tablesFilter === status ? "#ffffff" : "#111827",
                   border: "1px solid #d1d5db",
                   padding: "6px 10px",
-                  cursor: "pointer"
+                  cursor: "pointer",
                 }}
               >
                 {status}
@@ -512,77 +711,107 @@ function App() {
               Refresh
             </button>
           </div>
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            <input
+              type="text"
+              value={selectedTableId}
+              onChange={(event) => setSelectedTableId(event.target.value.trim() || "tbl_001")}
+              placeholder="Table ID"
+            />
+            <button
+              type="button"
+              onClick={() => void openTable()}
+              disabled={tableActionPending !== null}
+            >
+              {tableActionPending === "open" ? "Opening..." : "Open Table"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void placeTestOrder()}
+              disabled={tableActionPending !== null}
+            >
+              {tableActionPending === "place" ? "Placing..." : "Place Test Order"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void closeTable()}
+              disabled={tableActionPending !== null}
+            >
+              {tableActionPending === "close" ? "Closing..." : "Close Table"}
+            </button>
+          </div>
+
+          {tableActionMessage ? <p>{tableActionMessage}</p> : null}
+          {tableActionError ? <p>{tableActionError}</p> : null}
           {tablesLoading ? <p>Loading tables...</p> : null}
           {tablesError ? <p>Tables error: {tablesError}</p> : null}
+
           <p>Rows: {tablesList.length}</p>
           <ul>
             {tablesList.map((row) => (
-              <li key={row.tableId} style={{ marginBottom: 10 }}>
-                <button
-                  type="button"
-                  onClick={() => setTableId(row.tableId)}
-                  style={{ cursor: "pointer" }}
-                >
+              <li
+                key={row.tableId}
+                style={{
+                  marginBottom: 10,
+                  padding: 8,
+                  border: selectedTableId === row.tableId ? "1px solid #111827" : "1px solid #d1d5db",
+                }}
+              >
+                <button type="button" onClick={() => setSelectedTableId(row.tableId)}>
                   Select
                 </button>{" "}
-                <strong>{row.tableId}</strong> | {row.status} | opened {formatTime(row.openedAt)} |
-                closed {formatTime(row.closedAt)} | last order {formatTime(row.lastOrderAt)} |
-                total {formatMoney(row.totals.amountCents, row.totals.currency)} | counts:
-                total={row.counts.ordersTotal}, placed={row.counts.placed}, accepted=
-                {row.counts.accepted}, ready={row.counts.ready}
+                <strong>{row.tableId}</strong> | {row.status} | opened {formatTimestamp(row.openedAt)} |
+                closed {formatTimestamp(row.closedAt)} | last order {formatTimestamp(row.lastOrderAt)} |
+                total {formatMoneyValue(row.totals)} | counts: total={row.counts.ordersTotal}, placed=
+                {row.counts.placed}, accepted={row.counts.accepted}, ready={row.counts.ready}
               </li>
             ))}
           </ul>
+
+          <section>
+            <h2>Selected Table ({selectedTableId})</h2>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <button type="button" onClick={() => void refreshSelectedTable()}>
+                Reload Table Data
+              </button>
+            </div>
+            {tableOrdersLoading ? <p>Loading table orders...</p> : null}
+            {tableOrdersError ? <p>Table orders error: {tableOrdersError}</p> : null}
+
+            <h3>Table Summary</h3>
+            {tableSummary ? (
+              <div>
+                <p>Status: {tableSummary.status}</p>
+                <p>Total: {formatMoneyValue(tableSummary.totals)}</p>
+                <p>
+                  Counts: total={tableSummary.counts.ordersTotal}, placed={tableSummary.counts.placed},
+                  accepted={tableSummary.counts.accepted}, ready={tableSummary.counts.ready}
+                </p>
+                <p>Opened: {formatTimestamp(tableSummary.openedAt)}</p>
+                <p>Closed: {formatTimestamp(tableSummary.closedAt)}</p>
+                <p>Last order: {formatTimestamp(tableSummary.lastOrderAt)}</p>
+              </div>
+            ) : (
+              <p>No table summary available.</p>
+            )}
+
+            <h3>Table Orders ({selectedTableOrders.length})</h3>
+            <ul>
+              {selectedTableOrders.map((order) => (
+                <li key={order.orderId} style={{ marginBottom: 10 }}>
+                  <div>
+                    <strong>{order.orderId}</strong>
+                  </div>
+                  <div>Status: {order.status}</div>
+                  <div>Total: {formatMoneyValue(getOrderMoney(order))}</div>
+                  <div>Created: {formatTimestamp(order.createdAt)}</div>
+                </li>
+              ))}
+            </ul>
+          </section>
         </section>
       )}
-
-      <section>
-        <h2>Selected Table ({tableId})</h2>
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <button type="button" onClick={() => void loadTableOrders()}>
-            Reload Table Orders
-          </button>
-          <button type="button" onClick={() => void closeTable()}>
-            Close Table
-          </button>
-        </div>
-        {tableActionMessage ? <p>{tableActionMessage}</p> : null}
-        {tableOrdersLoading ? <p>Loading table orders...</p> : null}
-        {tableOrdersError ? <p>Table orders error: {tableOrdersError}</p> : null}
-
-        <h3>Table Summary</h3>
-        {tableSummary ? (
-          <div>
-            <p>Status: {tableSummary.status}</p>
-            <p>
-              Total: {formatMoney(tableSummary.totals.amountCents, tableSummary.totals.currency)}
-            </p>
-            <p>
-              Counts: total={tableSummary.counts.ordersTotal}, placed={tableSummary.counts.placed},
-              accepted={tableSummary.counts.accepted}, ready={tableSummary.counts.ready}
-            </p>
-            <p>Opened: {formatTime(tableSummary.openedAt)}</p>
-            <p>Closed: {formatTime(tableSummary.closedAt)}</p>
-            <p>Last order: {formatTime(tableSummary.lastOrderAt)}</p>
-          </div>
-        ) : (
-          <p>No table summary available.</p>
-        )}
-
-        <h3>Table Orders ({selectedTableOrders.length})</h3>
-        <ul>
-          {selectedTableOrders.map((order) => (
-            <li key={order.orderId} style={{ marginBottom: 10 }}>
-              <div>
-                <strong>{order.orderId}</strong>
-              </div>
-              <div>Status: {order.status}</div>
-              <div>Total: {formatOrderTotal(order.totalMoney)}</div>
-              <div>Created: {formatTime(order.createdAt)}</div>
-            </li>
-          ))}
-        </ul>
-      </section>
     </main>
   );
 }

@@ -37,6 +37,7 @@ type TableOrder = {
   orderId: string;
   tableId: string;
   status: string;
+  total?: OrderMoney | null;
   totalMoney?: OrderMoney | null;
   createdAt: string;
   lines: OrderLine[];
@@ -52,13 +53,43 @@ type EventEnvelope = {
   payload?: Record<string, unknown>;
 };
 
+type ApiErrorResponse = {
+  error?: {
+    code?: string;
+    message?: string;
+  };
+};
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
+const selectedTableStorageKey = "rop.selectedTableId";
 
-function formatMoney(money: Money): string {
+function readInitialTableId(): string {
+  if (typeof window === "undefined") {
+    return "tbl_001";
+  }
+  return window.localStorage.getItem(selectedTableStorageKey) || "tbl_001";
+}
+
+function buildIdempotencyKey(tableId: string): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+    pad(now.getSeconds()),
+  ].join("");
+  const random = Math.random().toString(36).slice(2, 8).padEnd(6, "0");
+  return `rop8-${tableId}-${stamp}-${random}`;
+}
+
+function formatMenuMoney(money: Money): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: money.currency
+    currency: money.currency,
   }).format(money.amountCents / 100);
 }
 
@@ -68,7 +99,7 @@ function formatOrderTotal(total: OrderMoney | null | undefined): string {
   }
   return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: total.currency
+    currency: total.currency,
   }).format(total.amountCents / 100);
 }
 
@@ -83,14 +114,28 @@ function formatTimestamp(value: string | null | undefined): string {
   return date.toLocaleString();
 }
 
+function normalizeOrder(order: TableOrder): TableOrder {
+  return {
+    ...order,
+    totalMoney: order.totalMoney ?? order.total ?? null,
+    lines: Array.isArray(order.lines) ? order.lines : [],
+  };
+}
+
+function getOrderMoney(order: TableOrder): OrderMoney | null | undefined {
+  return order.totalMoney ?? order.total;
+}
+
 async function readErrorMessage(response: Response): Promise<string> {
   try {
-    const payload = (await response.json()) as { error?: { message?: string } };
+    const payload = (await response.json()) as ApiErrorResponse;
     if (payload.error?.message) {
-      return payload.error.message;
+      return payload.error.code
+        ? `${payload.error.code}: ${payload.error.message}`
+        : payload.error.message;
     }
   } catch {
-    // ignore parsing issues
+    // Ignore malformed error payloads.
   }
   return `request failed (${response.status})`;
 }
@@ -105,12 +150,9 @@ export function MenuPage() {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState("Connecting");
-  const tableId = "tbl_001";
+  const [tableId, setTableId] = useState(readInitialTableId);
 
-  const menuEndpoint = useMemo(
-    () => `${apiBaseUrl}/v1/restaurants/rst_001/menu`,
-    []
-  );
+  const menuEndpoint = useMemo(() => `${apiBaseUrl}/v1/restaurants/rst_001/menu`, []);
   const tableOrdersEndpoint = useMemo(
     () =>
       `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(tableId)}/orders?status=ALL&limit=50`,
@@ -131,11 +173,11 @@ export function MenuPage() {
   function mergeOrders(incoming: TableOrder[]): void {
     setTableOrders((current) => {
       const next = { ...current };
-      for (const order of incoming) {
-        if (!order.orderId || order.tableId !== tableId) {
+      for (const incomingOrder of incoming) {
+        if (!incomingOrder.orderId || incomingOrder.tableId !== tableId) {
           continue;
         }
-        next[order.orderId] = order;
+        next[incomingOrder.orderId] = normalizeOrder(incomingOrder);
       }
       return next;
     });
@@ -151,16 +193,23 @@ export function MenuPage() {
       }
       const payload = (await response.json()) as TableOrdersResponse;
       mergeOrders(payload.orders);
-    } catch (err) {
-      setOrdersError(err instanceof Error ? err.message : "failed to load table orders");
+    } catch (loadError) {
+      setOrdersError(loadError instanceof Error ? loadError.message : "failed to load table orders");
     } finally {
       setOrdersLoading(false);
     }
   }
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(selectedTableStorageKey, tableId);
+    }
+  }, [tableId]);
+
+  useEffect(() => {
     let active = true;
-    async function loadMenu() {
+
+    async function loadMenu(): Promise<void> {
       setLoading(true);
       try {
         const response = await fetch(menuEndpoint);
@@ -172,9 +221,9 @@ export function MenuPage() {
           setMenu(payload);
           setError(null);
         }
-      } catch (err) {
+      } catch (loadError) {
         if (active) {
-          setError(err instanceof Error ? err.message : "unknown error");
+          setError(loadError instanceof Error ? loadError.message : "unknown error");
         }
       } finally {
         if (active) {
@@ -182,6 +231,7 @@ export function MenuPage() {
         }
       }
     }
+
     void loadMenu();
     return () => {
       active = false;
@@ -189,6 +239,8 @@ export function MenuPage() {
   }, [menuEndpoint]);
 
   useEffect(() => {
+    setTableOrders({});
+    setOrderResult(null);
     void loadTableOrders();
   }, [tableOrdersEndpoint]);
 
@@ -200,8 +252,11 @@ export function MenuPage() {
     socket.onmessage = (event) => {
       try {
         const envelope = JSON.parse(event.data) as EventEnvelope;
-        const payload = envelope.payload as Record<string, unknown> | undefined;
+        const payload = envelope.payload;
         if (!payload || typeof payload.orderId !== "string") {
+          return;
+        }
+        if (String(payload.tableId ?? "") !== tableId) {
           return;
         }
         mergeOrders([
@@ -211,15 +266,15 @@ export function MenuPage() {
             status: String(payload.status ?? ""),
             totalMoney: payload.totalMoney as OrderMoney | null | undefined,
             createdAt: String(payload.createdAt ?? ""),
-            lines: Array.isArray(payload.lines) ? (payload.lines as OrderLine[]) : []
-          }
+            lines: Array.isArray(payload.lines) ? (payload.lines as OrderLine[]) : [],
+          },
         ]);
       } catch {
         // Ignore malformed event payloads.
       }
     };
     return () => socket.close();
-  }, [wsUrl, tableId]);
+  }, [tableId, wsUrl]);
 
   async function placeTestOrder(): Promise<void> {
     setPlacingOrder(true);
@@ -227,17 +282,21 @@ export function MenuPage() {
     try {
       const response = await fetch(placeOrderEndpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lines: [{ itemId: "itm_001", quantity: 1 }] })
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": buildIdempotencyKey(tableId),
+        },
+        body: JSON.stringify({ lines: [{ itemId: "itm_001", quantity: 1 }] }),
       });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
-      const payload = (await response.json()) as { orderId?: string };
-      setOrderResult(`Created order ${payload.orderId}`);
+      const payload = normalizeOrder((await response.json()) as TableOrder);
+      mergeOrders([payload]);
+      setOrderResult(`Created order ${payload.orderId} for ${tableId}`);
       await loadTableOrders();
-    } catch (err) {
-      setOrderResult(err instanceof Error ? err.message : "order failed");
+    } catch (placeError) {
+      setOrderResult(placeError instanceof Error ? placeError.message : "order failed");
     } finally {
       setPlacingOrder(false);
     }
@@ -247,18 +306,32 @@ export function MenuPage() {
     () =>
       Object.values(tableOrders)
         .filter((order) => order.tableId === tableId)
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-    [tableOrders, tableId]
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+    [tableId, tableOrders]
   );
 
   if (loading) {
-    return <main><p>Loading menu...</p></main>;
+    return (
+      <main>
+        <p>Loading menu...</p>
+      </main>
+    );
   }
+
   if (error) {
-    return <main><p>Failed to load menu: {error}</p></main>;
+    return (
+      <main>
+        <p>Failed to load menu: {error}</p>
+      </main>
+    );
   }
+
   if (!menu) {
-    return <main><p>No menu available.</p></main>;
+    return (
+      <main>
+        <p>No menu available.</p>
+      </main>
+    );
   }
 
   return (
@@ -267,15 +340,27 @@ export function MenuPage() {
       <p>Restaurant: {menu.restaurantId}</p>
       <p>Version: {menu.menuVersion}</p>
       <p>Table updates: {connectionStatus}</p>
-      <button type="button" onClick={() => void placeTestOrder()} disabled={placingOrder}>
-        {placingOrder ? "Placing..." : "Place test order"}
-      </button>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <label htmlFor="table-id-input">Table ID</label>
+        <input
+          id="table-id-input"
+          type="text"
+          value={tableId}
+          onChange={(event) => setTableId(event.target.value.trim() || "tbl_001")}
+        />
+        <button type="button" onClick={() => void placeTestOrder()} disabled={placingOrder}>
+          {placingOrder ? "Placing..." : "Place test order"}
+        </button>
+      </div>
+
       {orderResult ? <p>{orderResult}</p> : null}
+
       <ul>
         {menu.items.map((item) => (
           <li key={item.itemId}>
             <strong>{item.name}</strong>{" "}
-            <span>{formatMoney(item.priceMoney)}</span>
+            <span>{formatMenuMoney(item.priceMoney)}</span>
             {!item.isAvailable ? <em> (unavailable)</em> : null}
           </li>
         ))}
@@ -291,7 +376,7 @@ export function MenuPage() {
             <li key={order.orderId}>
               <strong>{order.orderId}</strong>{" "}
               <span>{order.status}</span>{" "}
-              <span>{formatOrderTotal(order.totalMoney)}</span>{" "}
+              <span>{formatOrderTotal(getOrderMoney(order))}</span>{" "}
               <span>{formatTimestamp(order.createdAt)}</span>
             </li>
           ))}
