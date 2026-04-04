@@ -126,6 +126,19 @@ function getOrderMoney(order: TableOrder): OrderMoney | null | undefined {
   return order.totalMoney ?? order.total;
 }
 
+function getOrderStatusChipClass(status: string): string {
+  switch (status) {
+    case "PLACED":
+      return "chip chipPlaced";
+    case "ACCEPTED":
+      return "chip chipAccepted";
+    case "READY":
+      return "chip chipReady";
+    default:
+      return "chip";
+  }
+}
+
 async function readErrorMessage(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as ApiErrorResponse;
@@ -159,8 +172,7 @@ export function MenuPage() {
     [tableId]
   );
   const placeOrderEndpoint = useMemo(
-    () =>
-      `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(tableId)}/orders`,
+    () => `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(tableId)}/orders`,
     [tableId]
   );
   const wsUrl = useMemo(() => {
@@ -310,78 +322,174 @@ export function MenuPage() {
     [tableId, tableOrders]
   );
 
+  const orderResultIsError = orderResult !== null && !orderResult.startsWith("Created order ");
+
   if (loading) {
     return (
-      <main>
-        <p>Loading menu...</p>
+      <main className="container">
+        <section className="card">
+          <div className="cardBody">
+            <div className="infoBox">Loading menu…</div>
+          </div>
+        </section>
       </main>
     );
   }
 
   if (error) {
     return (
-      <main>
-        <p>Failed to load menu: {error}</p>
+      <main className="container">
+        <section className="card">
+          <div className="cardBody">
+            <div className="errorBox">Failed to load menu: {error}</div>
+          </div>
+        </section>
       </main>
     );
   }
 
   if (!menu) {
     return (
-      <main>
-        <p>No menu available.</p>
+      <main className="container">
+        <section className="card">
+          <div className="cardBody">
+            <div className="emptyState">No menu available.</div>
+          </div>
+        </section>
       </main>
     );
   }
 
   return (
-    <main>
-      <h1>Restaurant Menu</h1>
-      <p>Restaurant: {menu.restaurantId}</p>
-      <p>Version: {menu.menuVersion}</p>
-      <p>Table updates: {connectionStatus}</p>
+    <main className="container">
+      <header className="header">
+        <div>
+          <p className="eyebrow">Restaurant Operating Platform</p>
+          <h1 className="title">Restaurant Menu</h1>
+          <p className="subtitle">
+            Live ordering view for <span className="mono">{menu.restaurantId}</span> using menu version <span className="mono">v{menu.menuVersion}</span>.
+          </p>
+        </div>
+        <div className={connectionStatus === "Connected" ? "badge badgeStrong" : "badge badgeMuted"}>
+          {connectionStatus}
+        </div>
+      </header>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-        <label htmlFor="table-id-input">Table ID</label>
-        <input
-          id="table-id-input"
-          type="text"
-          value={tableId}
-          onChange={(event) => setTableId(event.target.value.trim() || "tbl_001")}
-        />
-        <button type="button" onClick={() => void placeTestOrder()} disabled={placingOrder}>
-          {placingOrder ? "Placing..." : "Place test order"}
-        </button>
-      </div>
+      <section className="card">
+        <div className="cardHeader">
+          <div>
+            <h2 className="sectionTitle">Table Controls</h2>
+            <p className="hint">Choose a table, keep it in local storage, and place a test order against the seeded menu.</p>
+          </div>
+          <span className="badge mono">{tableId}</span>
+        </div>
+        <div className="cardBody">
+          <div className="controlGrid">
+            <div className="fieldGroup">
+              <label className="label" htmlFor="table-id-input">
+                Table ID
+              </label>
+              <input
+                id="table-id-input"
+                className="input mono"
+                type="text"
+                value={tableId}
+                onChange={(event) => setTableId(event.target.value.trim() || "tbl_001")}
+              />
+            </div>
+            <div className="fieldGroup">
+              <span className="label">Quick Action</span>
+              <button type="button" className="btn btnPrimary" onClick={() => void placeTestOrder()} disabled={placingOrder}>
+                {placingOrder ? "Placing…" : "Place Test Order"}
+              </button>
+            </div>
+          </div>
 
-      {orderResult ? <p>{orderResult}</p> : null}
+          <p className="hint">The quick action posts a single line item for <span className="mono">itm_001</span> using a fresh idempotency key.</p>
 
-      <ul>
-        {menu.items.map((item) => (
-          <li key={item.itemId}>
-            <strong>{item.name}</strong>{" "}
-            <span>{formatMenuMoney(item.priceMoney)}</span>
-            {!item.isAvailable ? <em> (unavailable)</em> : null}
-          </li>
-        ))}
-      </ul>
-
-      <section>
-        <h2>My Table Orders ({tableId})</h2>
-        {ordersLoading ? <p>Loading orders...</p> : null}
-        {ordersError ? <p>Orders error: {ordersError}</p> : null}
-        {!ordersLoading && orderedTableOrders.length === 0 ? <p>No orders yet.</p> : null}
-        <ul>
-          {orderedTableOrders.map((order) => (
-            <li key={order.orderId}>
-              <strong>{order.orderId}</strong>{" "}
-              <span>{order.status}</span>{" "}
-              <span>{formatOrderTotal(getOrderMoney(order))}</span>{" "}
-              <span>{formatTimestamp(order.createdAt)}</span>
-            </li>
-          ))}
-        </ul>
+          {orderResult ? (
+            <div className={orderResultIsError ? "errorBox" : "infoBox"}>{orderResult}</div>
+          ) : null}
+        </div>
       </section>
+
+      <div className="pageGrid">
+        <section className="card">
+          <div className="cardHeader">
+            <div>
+              <h2 className="sectionTitle">Menu</h2>
+              <p className="hint">Available menu items are rendered as a responsive card grid for quick scanning.</p>
+            </div>
+            <span className="badge">{menu.items.length} items</span>
+          </div>
+          <div className="cardBody">
+            <div className="menuGrid">
+              {menu.items.map((item) => (
+                <article key={item.itemId} className="menuCard">
+                  <div className="rowHeader">
+                    <div>
+                      <h3 className="subheading">{item.name}</h3>
+                      <p className="muted mono">{item.itemId}</p>
+                    </div>
+                    <span className={item.isAvailable ? "chip chipPlaced" : "chip chipClosed"}>
+                      {item.isAvailable ? "Available" : "Unavailable"}
+                    </span>
+                  </div>
+                  <p className="menuPrice">{formatMenuMoney(item.priceMoney)}</p>
+                  <p className="rowBody">{item.description?.trim() || "No description provided."}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="card">
+          <div className="cardHeader">
+            <div>
+              <h2 className="sectionTitle">My Table Orders</h2>
+              <p className="hint">Hydrated from REST for <span className="mono">{tableId}</span>, then kept current from websocket events.</p>
+            </div>
+            <span className="badge">{orderedTableOrders.length} orders</span>
+          </div>
+          <div className="cardBody">
+            {ordersLoading ? <div className="infoBox">Loading orders…</div> : null}
+            {ordersError ? <div className="errorBox">{ordersError}</div> : null}
+            {!ordersLoading && orderedTableOrders.length === 0 ? (
+              <div className="emptyState">No orders yet for this table.</div>
+            ) : null}
+
+            <div className="listStack">
+              {orderedTableOrders.map((order) => (
+                <article key={order.orderId} className="row">
+                  <div className="rowHeader">
+                    <div>
+                      <div className="rowTitle mono">{order.orderId}</div>
+                      <p className="muted">Created {formatTimestamp(order.createdAt)}</p>
+                    </div>
+                    <span className={getOrderStatusChipClass(order.status)}>{order.status}</span>
+                  </div>
+                  <div className="statsGrid">
+                    <div className="statCard">
+                      <div className="statLabel">Total</div>
+                      <div className="statValue">{formatOrderTotal(getOrderMoney(order))}</div>
+                    </div>
+                    <div className="statCard">
+                      <div className="statLabel">Lines</div>
+                      <div className="statValue">{order.lines.length}</div>
+                    </div>
+                  </div>
+                  <div className="divider" />
+                  <p className="rowBody">
+                    {order.lines.length > 0
+                      ? order.lines.map((line) => `${line.quantity}x ${line.name}`).join(", ")
+                      : "No line items available."}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
   );
 }

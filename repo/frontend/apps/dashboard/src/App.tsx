@@ -25,7 +25,18 @@ type OrderPayload = {
 
 type EventEnvelope = {
   event_type: string;
-  payload?: Record<string, unknown>;
+  payload?: unknown;
+};
+
+type TableOpenedPayload = {
+  tableId: string;
+  restaurantId?: string;
+  openedAt?: string;
+};
+
+type TableClosedPayload = {
+  tableId: string;
+  closedAt?: string;
 };
 
 type KitchenQueueResponse = {
@@ -128,6 +139,22 @@ function normalizeOrder(order: OrderPayload): OrderPayload {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" ? value : null;
+}
+
+function getTableIdFromPayload(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  return getString(payload, "tableId");
+}
+
 function buildOrderFromEvent(payload: Record<string, unknown>): OrderPayload | null {
   if (typeof payload.orderId !== "string") {
     return null;
@@ -160,6 +187,23 @@ function buildIdempotencyKey(tableId: string): string {
 
 function formatApiError(error: ApiError): string {
   return error.code ? `${error.code}: ${error.message}` : error.message;
+}
+
+function getOrderStatusChipClass(status: string): string {
+  switch (status) {
+    case "PLACED":
+      return "chip chipPlaced";
+    case "ACCEPTED":
+      return "chip chipAccepted";
+    case "READY":
+      return "chip chipReady";
+    default:
+      return "chip";
+  }
+}
+
+function getTableStatusChipClass(status: string): string {
+  return status === "OPEN" ? "chip chipOpen" : "chip chipClosed";
 }
 
 async function readApiError(response: Response): Promise<ApiError> {
@@ -368,7 +412,6 @@ function App() {
   async function refreshSelectedTable(): Promise<void> {
     await Promise.all([loadTableOrders(), loadTableSummary()]);
   }
-
   async function handleOrderAction(
     order: OrderPayload,
     action: "accept" | "ready"
@@ -531,7 +574,7 @@ function App() {
       try {
         const envelope = JSON.parse(event.data) as EventEnvelope;
         const payload = envelope.payload;
-        if (!payload) {
+        if (!isRecord(payload)) {
           return;
         }
 
@@ -559,12 +602,18 @@ function App() {
           return;
         }
 
-        if (envelope.event_type === "table.opened" && typeof payload.tableId === "string") {
+        const eventTableId = getTableIdFromPayload(payload);
+        if (envelope.event_type === "table.opened" && eventTableId) {
+          const openedPayload = payload as TableOpenedPayload;
           upsertTableRow({
-            tableId: payload.tableId,
-            restaurantId: typeof payload.restaurantId === "string" ? payload.restaurantId : "rst_001",
+            tableId: eventTableId,
+            restaurantId:
+              typeof openedPayload.restaurantId === "string"
+                ? openedPayload.restaurantId
+                : "rst_001",
             status: "OPEN",
-            openedAt: typeof payload.openedAt === "string" ? payload.openedAt : null,
+            openedAt:
+              typeof openedPayload.openedAt === "string" ? openedPayload.openedAt : null,
             closedAt: null,
             lastOrderAt: null,
             totals: { amountCents: 0, currency: "USD" },
@@ -573,22 +622,26 @@ function App() {
           return;
         }
 
-        if (envelope.event_type === "table.closed" && typeof payload.tableId === "string") {
+        if (envelope.event_type === "table.closed" && eventTableId) {
+          const closedPayload = payload as TableClosedPayload;
           setTables((current) => {
-            const row = current[payload.tableId];
+            const row = current[eventTableId];
             if (!row) {
               return current;
             }
             return {
               ...current,
-              [payload.tableId]: {
+              [eventTableId]: {
                 ...row,
                 status: "CLOSED",
-                closedAt: typeof payload.closedAt === "string" ? payload.closedAt : row.closedAt,
+                closedAt:
+                  typeof closedPayload.closedAt === "string"
+                    ? closedPayload.closedAt
+                    : row.closedAt,
               },
             };
           });
-          if (payload.tableId === selectedTableId) {
+          if (eventTableId === selectedTableId) {
             void loadTableSummary();
           }
         }
@@ -598,218 +651,365 @@ function App() {
     };
     return () => socket.close();
   }, [selectedTableId, wsUrl]);
-
   return (
-    <main style={{ fontFamily: "sans-serif", padding: 16 }}>
-      <h1>Kitchen Dashboard</h1>
-      <p>Connection: {connectionStatus}</p>
+    <main className="container">
+      <header className="header">
+        <div>
+          <p className="eyebrow">Restaurant Operating Platform</p>
+          <h1 className="title">Kitchen Dashboard</h1>
+          <p className="subtitle">
+            Live kitchen queue, table registry, and table drill-down for <span className="mono">rst_001</span>.
+          </p>
+        </div>
+        <div className={connectionStatus === "Connected" ? "badge badgeStrong" : "badge badgeMuted"}>
+          {connectionStatus}
+        </div>
+      </header>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+      <nav className="tabs" aria-label="Dashboard views">
         {(["TABLES", "KITCHEN"] as const).map((label) => (
           <button
             key={label}
             type="button"
+            className={`tab ${view === label ? "tabActive" : ""}`}
             onClick={() => setView(label)}
-            style={{
-              background: view === label ? "#111827" : "#f3f4f6",
-              color: view === label ? "#ffffff" : "#111827",
-              border: "1px solid #d1d5db",
-              padding: "6px 10px",
-              cursor: "pointer",
-            }}
           >
             {label}
           </button>
         ))}
-      </div>
+      </nav>
 
       {view === "KITCHEN" ? (
-        <section style={{ marginBottom: 24 }}>
-          <h2>Kitchen Queue</h2>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            {(["PLACED", "ACCEPTED", "READY"] as const).map((status) => (
-              <button
-                key={status}
-                type="button"
-                onClick={() => setActiveStatus(status)}
-                style={{
-                  background: activeStatus === status ? "#111827" : "#f3f4f6",
-                  color: activeStatus === status ? "#ffffff" : "#111827",
-                  border: "1px solid #d1d5db",
-                  padding: "6px 10px",
-                  cursor: "pointer",
-                }}
-              >
-                {status}
-              </button>
-            ))}
+        <section className="card">
+          <div className="cardHeader">
+            <div>
+              <h2 className="sectionTitle">Kitchen Queue</h2>
+              <p className="hint">Track the active queue and progress orders without leaving the dashboard.</p>
+            </div>
+            <div className="badge">{kitchenQueue.length} visible</div>
           </div>
-          <p>{activeStatus} orders: {kitchenQueue.length}</p>
-          {loadingQueue ? <p>Loading queue...</p> : null}
-          {queueError ? <p>Queue error: {queueError}</p> : null}
-          <ul>
-            {kitchenQueue.map((order) => {
-              const isPending = orderActionPending[order.orderId] === true;
-              const errorMessage = orderActionError[order.orderId];
+          <div className="cardBody">
+            <div className="tabs" aria-label="Kitchen status filters">
+              {(["PLACED", "ACCEPTED", "READY"] as const).map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  className={`tab ${activeStatus === status ? "tabActive" : ""}`}
+                  onClick={() => setActiveStatus(status)}
+                >
+                  {status}
+                </button>
+              ))}
+            </div>
 
-              return (
-                <li key={order.orderId} style={{ marginBottom: 14 }}>
-                  <div>
-                    <strong>{order.orderId}</strong> | table {order.tableId}
-                  </div>
-                  <div>Status: {order.status}</div>
-                  <div>{formatMoneyValue(getOrderMoney(order))}</div>
-                  <div>{order.lines.map((line) => `${line.quantity}x ${line.name}`).join(", ")}</div>
-                  <div>Created: {formatTimestamp(order.createdAt)}</div>
-                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                    {order.status === "PLACED" ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleOrderAction(order, "accept")}
-                        disabled={isPending}
-                      >
-                        {isPending ? "Accepting..." : "Accept"}
-                      </button>
-                    ) : null}
-                    {order.status === "ACCEPTED" ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleOrderAction(order, "ready")}
-                        disabled={isPending}
-                      >
-                        {isPending ? "Updating..." : "Mark Ready"}
-                      </button>
-                    ) : null}
-                  </div>
-                  {errorMessage ? <p>{errorMessage}</p> : null}
-                </li>
-              );
-            })}
-          </ul>
+            {loadingQueue ? <div className="infoBox">Loading queue…</div> : null}
+            {queueError ? <div className="errorBox">{queueError}</div> : null}
+
+            {kitchenQueue.length === 0 && !loadingQueue ? (
+              <div className="emptyState">No {activeStatus.toLowerCase()} orders are in the queue.</div>
+            ) : null}
+
+            <div className="listStack">
+              {kitchenQueue.map((order) => {
+                const isPending = orderActionPending[order.orderId] === true;
+                const errorMessage = orderActionError[order.orderId];
+
+                return (
+                  <article key={order.orderId} className="row">
+                    <div className="rowHeader">
+                      <div>
+                        <div className="rowTitle mono">{order.orderId}</div>
+                        <p className="muted">
+                          Table <span className="mono">{order.tableId}</span>
+                        </p>
+                      </div>
+                      <span className={getOrderStatusChipClass(order.status)}>{order.status}</span>
+                    </div>
+
+                    <div className="statsGrid">
+                      <div className="statCard">
+                        <div className="statLabel">Total</div>
+                        <div className="statValue">{formatMoneyValue(getOrderMoney(order))}</div>
+                      </div>
+                      <div className="statCard">
+                        <div className="statLabel">Created</div>
+                        <div className="statValue">{formatTimestamp(order.createdAt)}</div>
+                      </div>
+                    </div>
+
+                    <div className="divider" />
+
+                    <p className="rowBody">
+                      {order.lines.length > 0
+                        ? order.lines.map((line) => `${line.quantity}x ${line.name}`).join(", ")
+                        : "No line items available."}
+                    </p>
+
+                    <div className="rowActions">
+                      {order.status === "PLACED" ? (
+                        <button
+                          type="button"
+                          className="btn btnPrimary btnSmall"
+                          onClick={() => void handleOrderAction(order, "accept")}
+                          disabled={isPending}
+                        >
+                          {isPending ? "Accepting…" : "Accept"}
+                        </button>
+                      ) : null}
+                      {order.status === "ACCEPTED" ? (
+                        <button
+                          type="button"
+                          className="btn btnSecondary btnSmall"
+                          onClick={() => void handleOrderAction(order, "ready")}
+                          disabled={isPending}
+                        >
+                          {isPending ? "Updating…" : "Mark Ready"}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {errorMessage ? <div className="errorBox">{errorMessage}</div> : null}
+                  </article>
+                );
+              })}
+            </div>
+          </div>
         </section>
       ) : (
-        <section style={{ marginBottom: 24 }}>
-          <h2>Tables</h2>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-            {(["OPEN", "CLOSED", "ALL"] as const).map((status) => (
-              <button
-                key={status}
-                type="button"
-                onClick={() => setTablesFilter(status)}
-                style={{
-                  background: tablesFilter === status ? "#111827" : "#f3f4f6",
-                  color: tablesFilter === status ? "#ffffff" : "#111827",
-                  border: "1px solid #d1d5db",
-                  padding: "6px 10px",
-                  cursor: "pointer",
-                }}
-              >
-                {status}
-              </button>
-            ))}
-            <button type="button" onClick={() => void loadTables()}>
-              Refresh
-            </button>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-            <input
-              type="text"
-              value={selectedTableId}
-              onChange={(event) => setSelectedTableId(event.target.value.trim() || "tbl_001")}
-              placeholder="Table ID"
-            />
-            <button
-              type="button"
-              onClick={() => void openTable()}
-              disabled={tableActionPending !== null}
-            >
-              {tableActionPending === "open" ? "Opening..." : "Open Table"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void placeTestOrder()}
-              disabled={tableActionPending !== null}
-            >
-              {tableActionPending === "place" ? "Placing..." : "Place Test Order"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void closeTable()}
-              disabled={tableActionPending !== null}
-            >
-              {tableActionPending === "close" ? "Closing..." : "Close Table"}
-            </button>
-          </div>
-
-          {tableActionMessage ? <p>{tableActionMessage}</p> : null}
-          {tableActionError ? <p>{tableActionError}</p> : null}
-          {tablesLoading ? <p>Loading tables...</p> : null}
-          {tablesError ? <p>Tables error: {tablesError}</p> : null}
-
-          <p>Rows: {tablesList.length}</p>
-          <ul>
-            {tablesList.map((row) => (
-              <li
-                key={row.tableId}
-                style={{
-                  marginBottom: 10,
-                  padding: 8,
-                  border: selectedTableId === row.tableId ? "1px solid #111827" : "1px solid #d1d5db",
-                }}
-              >
-                <button type="button" onClick={() => setSelectedTableId(row.tableId)}>
-                  Select
-                </button>{" "}
-                <strong>{row.tableId}</strong> | {row.status} | opened {formatTimestamp(row.openedAt)} |
-                closed {formatTimestamp(row.closedAt)} | last order {formatTimestamp(row.lastOrderAt)} |
-                total {formatMoneyValue(row.totals)} | counts: total={row.counts.ordersTotal}, placed=
-                {row.counts.placed}, accepted={row.counts.accepted}, ready={row.counts.ready}
-              </li>
-            ))}
-          </ul>
-
-          <section>
-            <h2>Selected Table ({selectedTableId})</h2>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <button type="button" onClick={() => void refreshSelectedTable()}>
-                Reload Table Data
-              </button>
-            </div>
-            {tableOrdersLoading ? <p>Loading table orders...</p> : null}
-            {tableOrdersError ? <p>Table orders error: {tableOrdersError}</p> : null}
-
-            <h3>Table Summary</h3>
-            {tableSummary ? (
+        <section className="pageStack">
+          <section className="card">
+            <div className="cardHeader">
               <div>
-                <p>Status: {tableSummary.status}</p>
-                <p>Total: {formatMoneyValue(tableSummary.totals)}</p>
-                <p>
-                  Counts: total={tableSummary.counts.ordersTotal}, placed={tableSummary.counts.placed},
-                  accepted={tableSummary.counts.accepted}, ready={tableSummary.counts.ready}
-                </p>
-                <p>Opened: {formatTimestamp(tableSummary.openedAt)}</p>
-                <p>Closed: {formatTimestamp(tableSummary.closedAt)}</p>
-                <p>Last order: {formatTimestamp(tableSummary.lastOrderAt)}</p>
+                <h2 className="sectionTitle">Restaurant Tables</h2>
+                <p className="hint">Hydrate from REST, then keep the registry live from websocket events.</p>
               </div>
-            ) : (
-              <p>No table summary available.</p>
-            )}
+              <div className="badge">{tablesList.length} rows</div>
+            </div>
+            <div className="cardBody">
+              <div className="toolbar">
+                <div className="tabs" aria-label="Table status filters">
+                  {(["OPEN", "CLOSED", "ALL"] as const).map((status) => (
+                    <button
+                      key={status}
+                      type="button"
+                      className={`tab ${tablesFilter === status ? "tabActive" : ""}`}
+                      onClick={() => setTablesFilter(status)}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
+                <button type="button" className="btn btnSecondary btnSmall" onClick={() => void loadTables()}>
+                  Refresh
+                </button>
+              </div>
 
-            <h3>Table Orders ({selectedTableOrders.length})</h3>
-            <ul>
-              {selectedTableOrders.map((order) => (
-                <li key={order.orderId} style={{ marginBottom: 10 }}>
-                  <div>
-                    <strong>{order.orderId}</strong>
-                  </div>
-                  <div>Status: {order.status}</div>
-                  <div>Total: {formatMoneyValue(getOrderMoney(order))}</div>
-                  <div>Created: {formatTimestamp(order.createdAt)}</div>
-                </li>
-              ))}
-            </ul>
+              {tablesLoading ? <div className="infoBox">Loading tables…</div> : null}
+              {tablesError ? <div className="errorBox">{tablesError}</div> : null}
+            </div>
           </section>
+
+          <div className="layoutGrid">
+            <section className="card">
+              <div className="cardHeader">
+                <div>
+                  <h2 className="sectionTitle">Tables List</h2>
+                  <p className="hint">Select a table to inspect orders, totals, and workflow actions.</p>
+                </div>
+              </div>
+              <div className="cardBody">
+                {tablesList.length === 0 && !tablesLoading ? (
+                  <div className="emptyState">No tables match the current filter.</div>
+                ) : null}
+
+                <div className="listStack">
+                  {tablesList.map((row) => (
+                    <button
+                      key={row.tableId}
+                      type="button"
+                      className={`row rowSelectable ${selectedTableId === row.tableId ? "rowSelected" : ""}`}
+                      onClick={() => setSelectedTableId(row.tableId)}
+                    >
+                      <div className="rowHeader">
+                        <div>
+                          <div className="rowTitle mono">{row.tableId}</div>
+                          <p className="muted">
+                            Restaurant <span className="mono">{row.restaurantId}</span>
+                          </p>
+                        </div>
+                        <span className={getTableStatusChipClass(row.status)}>{row.status}</span>
+                      </div>
+
+                      <div className="statsGrid">
+                        <div className="statCard">
+                          <div className="statLabel">Total</div>
+                          <div className="statValue">{formatMoneyValue(row.totals)}</div>
+                        </div>
+                        <div className="statCard">
+                          <div className="statLabel">Orders</div>
+                          <div className="statValue">{row.counts.ordersTotal}</div>
+                        </div>
+                        <div className="statCard">
+                          <div className="statLabel">Opened</div>
+                          <div className="statValue">{formatTimestamp(row.openedAt)}</div>
+                        </div>
+                        <div className="statCard">
+                          <div className="statLabel">Last Order</div>
+                          <div className="statValue">{formatTimestamp(row.lastOrderAt)}</div>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+            <section className="card">
+              <div className="cardHeader">
+                <div>
+                  <h2 className="sectionTitle">Selected Table</h2>
+                  <p className="hint">
+                    Drive the order history view and quick actions from <span className="mono">{selectedTableId}</span>.
+                  </p>
+                </div>
+                <span className="badge mono">{selectedTableId}</span>
+              </div>
+              <div className="cardBody">
+                <div className="fieldRow">
+                  <div className="fieldGroup">
+                    <label className="label" htmlFor="dashboard-table-id">
+                      Table ID
+                    </label>
+                    <input
+                      id="dashboard-table-id"
+                      className="input mono"
+                      type="text"
+                      value={selectedTableId}
+                      onChange={(event) =>
+                        setSelectedTableId(event.target.value.trim() || "tbl_001")
+                      }
+                      placeholder="tbl_001"
+                    />
+                  </div>
+                </div>
+
+                <div className="actionsBar">
+                  <button
+                    type="button"
+                    className="btn btnPrimary"
+                    onClick={() => void openTable()}
+                    disabled={tableActionPending !== null}
+                  >
+                    {tableActionPending === "open" ? "Opening…" : "Open Table"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btnSecondary"
+                    onClick={() => void placeTestOrder()}
+                    disabled={tableActionPending !== null}
+                  >
+                    {tableActionPending === "place" ? "Placing…" : "Place Test Order"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btnDanger"
+                    onClick={() => void closeTable()}
+                    disabled={tableActionPending !== null}
+                  >
+                    {tableActionPending === "close" ? "Closing…" : "Close Table"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btnSecondary"
+                    onClick={() => void refreshSelectedTable()}
+                  >
+                    Reload Table Data
+                  </button>
+                </div>
+
+                {tableActionMessage ? <div className="infoBox">{tableActionMessage}</div> : null}
+                {tableActionError ? <div className="errorBox">{tableActionError}</div> : null}
+                {tableOrdersLoading ? <div className="infoBox">Loading table orders…</div> : null}
+                {tableOrdersError ? <div className="errorBox">{tableOrdersError}</div> : null}
+
+                <div className="divider" />
+
+                <h3 className="subheading">Summary</h3>
+                {tableSummary ? (
+                  <div className="statsGrid">
+                    <div className="statCard">
+                      <div className="statLabel">Status</div>
+                      <div className="statValue">
+                        <span className={getTableStatusChipClass(tableSummary.status)}>
+                          {tableSummary.status}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="statCard">
+                      <div className="statLabel">Total</div>
+                      <div className="statValue">{formatMoneyValue(tableSummary.totals)}</div>
+                    </div>
+                    <div className="statCard">
+                      <div className="statLabel">Orders</div>
+                      <div className="statValue">{tableSummary.counts.ordersTotal}</div>
+                    </div>
+                    <div className="statCard">
+                      <div className="statLabel">Placed / Accepted / Ready</div>
+                      <div className="statValue">
+                        {tableSummary.counts.placed} / {tableSummary.counts.accepted} / {tableSummary.counts.ready}
+                      </div>
+                    </div>
+                    <div className="statCard">
+                      <div className="statLabel">Opened</div>
+                      <div className="statValue">{formatTimestamp(tableSummary.openedAt)}</div>
+                    </div>
+                    <div className="statCard">
+                      <div className="statLabel">Closed</div>
+                      <div className="statValue">{formatTimestamp(tableSummary.closedAt)}</div>
+                    </div>
+                    <div className="statCard">
+                      <div className="statLabel">Last Order</div>
+                      <div className="statValue">{formatTimestamp(tableSummary.lastOrderAt)}</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="emptyState">No table summary available.</div>
+                )}
+
+                <div className="divider" />
+
+                <div className="sectionHeader">
+                  <h3 className="subheading">Table Orders</h3>
+                  <span className="badge">{selectedTableOrders.length} orders</span>
+                </div>
+
+                {selectedTableOrders.length === 0 && !tableOrdersLoading ? (
+                  <div className="emptyState">No orders loaded for this table.</div>
+                ) : null}
+
+                <div className="listStack">
+                  {selectedTableOrders.map((order) => (
+                    <article key={order.orderId} className="row">
+                      <div className="rowHeader">
+                        <div>
+                          <div className="rowTitle mono">{order.orderId}</div>
+                          <p className="muted">Created {formatTimestamp(order.createdAt)}</p>
+                        </div>
+                        <span className={getOrderStatusChipClass(order.status)}>{order.status}</span>
+                      </div>
+                      <div className="rowMeta">
+                        <span>Total {formatMoneyValue(getOrderMoney(order))}</span>
+                        <span>
+                          {order.lines.length > 0
+                            ? order.lines.map((line) => `${line.quantity}x ${line.name}`).join(", ")
+                            : "No line items available."}
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            </section>
+          </div>
         </section>
       )}
     </main>

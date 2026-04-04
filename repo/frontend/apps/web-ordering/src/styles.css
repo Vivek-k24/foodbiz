@@ -1,0 +1,303 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  background: #f4f4f4;
+  color: #111111;
+  --bg: #f4f4f4;
+  --surface: #ffffff;
+  --surface-muted: #fafafa;
+  --border: #d8d8d8;
+  --border-strong: #8b8b8b;
+  --text: #111111;
+  --text-muted: #5f5f5f;
+  --shadow: 0 12px 30px rgba(0, 0, 0, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+.container {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.header,
+.cardHeader,
+.rowHeader,
+.controlGrid,
+.pageGrid,
+.statsGrid,
+.listStack {
+  display: grid;
+  gap: 16px;
+}
+
+.header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  margin-bottom: 20px;
+}
+
+.eyebrow,
+.label,
+.statLabel {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title,
+.sectionTitle,
+.subheading,
+.rowTitle {
+  margin: 0;
+  color: var(--text);
+}
+
+.title {
+  font-size: clamp(2rem, 3vw, 2.6rem);
+  line-height: 1.05;
+}
+
+.subtitle,
+.hint,
+.muted,
+.rowBody,
+.statValue,
+.menuPrice {
+  margin: 0;
+}
+
+.subtitle,
+.hint,
+.muted,
+.rowBody {
+  color: var(--text-muted);
+}
+
+.badge,
+.chip,
+.btn,
+.input,
+.card,
+.menuCard,
+.row,
+.statCard,
+.errorBox,
+.infoBox,
+.emptyState {
+  border-radius: 16px;
+}
+
+.badge,
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: start;
+  border: 1px solid var(--border);
+  background: #f7f7f7;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.badgeStrong,
+.btnPrimary {
+  background: #111111;
+  color: #ffffff;
+  border-color: #111111;
+}
+
+.badgeMuted {
+  background: #e7e7e7;
+}
+
+.card,
+.menuCard,
+.row,
+.statCard {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.cardHeader {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  padding: 22px 22px 0;
+}
+
+.cardBody {
+  padding: 22px;
+}
+
+.pageGrid {
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  margin-top: 16px;
+}
+
+.controlGrid,
+.statsGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fieldGroup {
+  display: grid;
+  gap: 8px;
+}
+
+.input,
+.btn {
+  border: 1px solid var(--border-strong);
+  padding: 11px 12px;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.btn {
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.btn:hover {
+  background: #efefef;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  background: #ebebeb;
+  color: #9a9a9a;
+  border-color: #d5d5d5;
+  transform: none;
+}
+
+.btn:focus,
+.input:focus {
+  outline: 2px solid #111111;
+  outline-offset: 2px;
+}
+
+.menuGrid,
+.listStack {
+  display: grid;
+  gap: 12px;
+}
+
+.menuGrid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.menuCard,
+.row {
+  padding: 16px;
+}
+
+.rowHeader {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.menuPrice {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 12px 0 10px;
+}
+
+.statCard {
+  padding: 12px 14px;
+  background: var(--surface-muted);
+}
+
+.statValue {
+  margin-top: 6px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.chipPlaced {
+  background: #ededed;
+  color: #111111;
+}
+
+.chipAccepted {
+  background: #d9d9d9;
+  color: #111111;
+}
+
+.chipReady,
+.chipClosed {
+  background: #bfbfbf;
+  border-color: #989898;
+  color: #222222;
+}
+
+.errorBox,
+.infoBox,
+.emptyState {
+  border: 1px solid var(--border-strong);
+  background: #f4f4f4;
+  padding: 12px 14px;
+}
+
+.infoBox {
+  background: #fafafa;
+}
+
+.emptyState {
+  border-style: dashed;
+}
+
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 16px 0;
+}
+
+.mono {
+  font-family: Consolas, "SFMono-Regular", monospace;
+}
+
+@media (max-width: 900px) {
+  .header,
+  .cardHeader,
+  .pageGrid,
+  .controlGrid,
+  .statsGrid,
+  .rowHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .container {
+    padding-inline: 16px;
+  }
+}
