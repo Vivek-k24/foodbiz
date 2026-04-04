@@ -251,3 +251,47 @@ curl -s "http://localhost:8000/v1/restaurants/rst_001/tables?status=CLOSED&limit
 - Confirm `tbl_002` appears and updates as events arrive.
 - Refresh the page and confirm tables are re-hydrated from REST.
 - Click a table row and confirm selected table orders/summary hydrate.
+
+## Run & Verify (ROP-008)
+
+### Terminal A - Infrastructure + Backend
+
+```bash
+cd repo
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m rop.tools.seed
+```
+
+### Terminal B - Dashboard
+
+```bash
+cd repo/frontend
+pnpm i
+pnpm --filter dashboard dev -- --port 5174
+```
+
+Dashboard URL: `http://localhost:5174`
+
+### Terminal C - Web Ordering
+
+```bash
+cd repo/frontend
+pnpm --filter web-ordering dev -- --port 5173
+```
+
+Web ordering URL: `http://localhost:5173`
+
+### Verification Checklist (UI Only)
+
+1. Open dashboard at `http://localhost:5174` and switch to `TABLES`.
+2. Enter `tbl_002` in the table input and click `Open Table`.
+3. Confirm `tbl_002` appears as `OPEN` in the tables list.
+4. Open web ordering at `http://localhost:5173`, enter `tbl_002`, and click `Place test order`.
+5. Confirm `My Table Orders` in web ordering shows the new order for `tbl_002`.
+6. Return to dashboard, switch to `KITCHEN`, and in the `PLACED` tab click `Accept`.
+7. Switch to the `ACCEPTED` tab and click `Mark Ready` for the same order.
+8. Switch back to `TABLES`, select `tbl_002`, and click `Close Table`.
+9. Refresh both UIs and confirm:
+- Dashboard tables still hydrate from REST and show the current table state.
+- Web ordering still hydrates `My Table Orders` for the selected table from local storage.

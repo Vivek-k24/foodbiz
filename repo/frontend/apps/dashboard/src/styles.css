@@ -1,0 +1,354 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  background: #f3f3f3;
+  color: #111111;
+  --bg: #f3f3f3;
+  --surface: #ffffff;
+  --surface-muted: #fafafa;
+  --border: #d6d6d6;
+  --border-strong: #8a8a8a;
+  --text: #111111;
+  --text-muted: #5f5f5f;
+  --shadow: 0 12px 30px rgba(0, 0, 0, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.header,
+.cardHeader,
+.sectionHeader,
+.toolbar,
+.rowHeader,
+.actionsBar,
+.fieldRow,
+.tabs,
+.rowActions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header,
+.cardHeader,
+.sectionHeader,
+.toolbar,
+.rowHeader {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.header {
+  margin-bottom: 20px;
+}
+
+.eyebrow,
+.label,
+.statLabel {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title,
+.sectionTitle,
+.subheading,
+.rowTitle {
+  margin: 0;
+  color: var(--text);
+}
+
+.title {
+  font-size: clamp(2rem, 3vw, 2.6rem);
+  line-height: 1.05;
+}
+
+.subtitle,
+.hint,
+.muted,
+.rowBody,
+.rowMeta {
+  color: var(--text-muted);
+}
+
+.subtitle,
+.hint,
+.rowBody,
+.rowMeta,
+.statValue,
+.muted {
+  margin: 0;
+}
+
+.badge,
+.chip,
+.tab,
+.btn,
+.input,
+.row,
+.card,
+.statCard,
+.emptyState,
+.errorBox,
+.infoBox {
+  border-radius: 16px;
+}
+
+.badge,
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #f7f7f7;
+}
+
+.badgeStrong,
+.btnPrimary,
+.tabActive {
+  background: #111111;
+  border-color: #111111;
+  color: #ffffff;
+}
+
+.badgeMuted {
+  background: #e6e6e6;
+}
+
+.card {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.cardHeader {
+  padding: 22px 22px 0;
+}
+
+.cardBody {
+  padding: 22px;
+}
+
+.pageStack {
+  display: grid;
+  gap: 16px;
+}
+
+.layoutGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 16px;
+}
+
+.tabs {
+  margin-bottom: 16px;
+}
+
+.tab,
+.btn {
+  border: 1px solid var(--border-strong);
+  background: #ffffff;
+  color: var(--text);
+  cursor: pointer;
+  padding: 10px 14px;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.tab:hover,
+.btn:hover,
+.rowSelectable:hover {
+  background: #efefef;
+}
+
+.tab:active,
+.btn:active,
+.rowSelectable:active {
+  transform: translateY(1px);
+}
+
+.btnSecondary {
+  background: #ffffff;
+}
+
+.btnDanger {
+  background: #d4d4d4;
+  border-color: #8b8b8b;
+  color: #111111;
+}
+
+.btnSmall {
+  padding: 8px 12px;
+}
+
+.tab:disabled,
+.btn:disabled {
+  cursor: not-allowed;
+  background: #ebebeb;
+  color: #9a9a9a;
+  border-color: #d5d5d5;
+  transform: none;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: #ffffff;
+  color: var(--text);
+  padding: 11px 12px;
+}
+
+.input:focus,
+.tab:focus,
+.btn:focus,
+.rowSelectable:focus {
+  outline: 2px solid #111111;
+  outline-offset: 2px;
+}
+
+.fieldGroup {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.actionsBar {
+  margin-top: 16px;
+}
+
+.listStack {
+  display: grid;
+  gap: 12px;
+}
+
+.row {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  padding: 16px;
+  text-align: left;
+}
+
+.rowSelectable {
+  cursor: pointer;
+}
+
+.rowSelected {
+  border-color: #111111;
+  background: #f0f0f0;
+}
+
+.rowMeta {
+  display: grid;
+  gap: 6px;
+}
+
+.rowActions {
+  margin-top: 14px;
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.statCard {
+  border: 1px solid var(--border);
+  background: #fcfcfc;
+  padding: 12px 14px;
+}
+
+.statValue {
+  margin-top: 6px;
+  font-weight: 700;
+}
+
+.chipOpen,
+.chipPlaced {
+  background: #ededed;
+  color: #111111;
+}
+
+.chipAccepted {
+  background: #d9d9d9;
+  color: #111111;
+}
+
+.chipReady,
+.chipClosed {
+  background: #bfbfbf;
+  border-color: #989898;
+  color: #222222;
+}
+
+.errorBox,
+.infoBox,
+.emptyState {
+  border: 1px solid var(--border-strong);
+  background: #f4f4f4;
+  padding: 12px 14px;
+}
+
+.infoBox {
+  background: #fafafa;
+}
+
+.emptyState {
+  border-style: dashed;
+}
+
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 18px 0;
+}
+
+.mono {
+  font-family: Consolas, "SFMono-Regular", monospace;
+}
+
+@media (max-width: 900px) {
+  .layoutGrid,
+  .statsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .container {
+    padding-inline: 16px;
+  }
+}
