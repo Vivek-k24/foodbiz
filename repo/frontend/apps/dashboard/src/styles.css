@@ -167,10 +167,48 @@ button {
   gap: 16px;
 }
 
+.boardGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
 .layoutGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
   gap: 16px;
+}
+
+.column {
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.columnPlaced {
+  background: #f7f7f7;
+}
+
+.columnAccepted {
+  background: #efefef;
+}
+
+.columnReady {
+  background: #e3e3e3;
+}
+
+.columnHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cardList {
+  display: grid;
+  gap: 12px;
 }
 
 .tabs {
@@ -254,6 +292,13 @@ button {
   gap: 12px;
 }
 
+.orderCard {
+  border: 1px solid var(--border);
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 16px;
+}
+
 .row {
   width: 100%;
   border: 1px solid var(--border);
@@ -276,8 +321,41 @@ button {
   gap: 6px;
 }
 
+.orderMeta {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  color: var(--text-muted);
+}
+
 .rowActions {
   margin-top: 14px;
+}
+
+.actionRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.linesList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lineItem {
+  padding: 0;
+  color: var(--text);
+}
+
+.lineNotes {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
 }
 
 .statsGrid {
@@ -342,7 +420,14 @@ button {
   font-family: Consolas, "SFMono-Regular", monospace;
 }
 
+@media (max-width: 1120px) {
+  .boardGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 900px) {
+  .boardGrid,
   .layoutGrid,
   .statsGrid {
     grid-template-columns: 1fr;
