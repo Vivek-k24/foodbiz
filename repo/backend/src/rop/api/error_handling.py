@@ -32,6 +32,24 @@ from rop.application.use_cases.mark_order_ready import (
     OrderConflictError as ReadyOrderConflictError,
 )
 from rop.application.use_cases.mark_order_ready import OrderNotFoundError as ReadyOrderNotFoundError
+from rop.application.use_cases.mark_order_served import (
+    InvalidOrderTransitionError as ServedInvalidOrderTransitionError,
+)
+from rop.application.use_cases.mark_order_served import (
+    OrderConflictError as ServedOrderConflictError,
+)
+from rop.application.use_cases.mark_order_served import (
+    OrderNotFoundError as ServedOrderNotFoundError,
+)
+from rop.application.use_cases.mark_order_settled import (
+    InvalidOrderTransitionError as SettledInvalidOrderTransitionError,
+)
+from rop.application.use_cases.mark_order_settled import (
+    OrderConflictError as SettledOrderConflictError,
+)
+from rop.application.use_cases.mark_order_settled import (
+    OrderNotFoundError as SettledOrderNotFoundError,
+)
 from rop.application.use_cases.open_table import TableNotFoundError as GetTableNotFoundError
 from rop.application.use_cases.place_order import (
     IdempotencyReplayMismatchError,
@@ -119,6 +137,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         (GetOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (AcceptOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (ReadyOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
+        (ServedOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
+        (SettledOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (GetTableNotFoundError, 404, "TABLE_NOT_FOUND"),
         (PlaceOrderTableNotFoundError, 404, "TABLE_NOT_FOUND"),
         (TableNotOpenError, 409, "TABLE_NOT_OPEN"),
@@ -142,8 +162,20 @@ def register_exception_handlers(app: FastAPI) -> None:
             409,
             "INVALID_ORDER_TRANSITION",
         ),
+        (
+            ServedInvalidOrderTransitionError,
+            409,
+            "INVALID_ORDER_TRANSITION",
+        ),
+        (
+            SettledInvalidOrderTransitionError,
+            409,
+            "INVALID_ORDER_TRANSITION",
+        ),
         (AcceptOrderConflictError, 409, "CONFLICT"),
         (ReadyOrderConflictError, 409, "CONFLICT"),
+        (ServedOrderConflictError, 409, "CONFLICT"),
+        (SettledOrderConflictError, 409, "CONFLICT"),
         (InvalidKitchenQueueStatusError, 400, "INVALID_KITCHEN_QUEUE_STATUS"),
         (InvalidKitchenQueueCursorError, 400, "INVALID_KITCHEN_QUEUE_CURSOR"),
         (InvalidTableRegistryStatusError, 400, "INVALID_TABLE_REGISTRY_STATUS"),

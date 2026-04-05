@@ -24,7 +24,7 @@ def test_websocket_receives_order_transition_events() -> None:
 
             def _reader() -> None:
                 try:
-                    for _ in range(5):
+                    for _ in range(7):
                         events.put(websocket.receive_text())
                 except Exception as exc:
                     errors.put(exc)
@@ -64,6 +64,12 @@ def test_websocket_receives_order_transition_events() -> None:
             ready_response = client.post(f"/v1/orders/{order_id}/ready")
             assert ready_response.status_code == 200
 
+            served_response = client.post(f"/v1/orders/{order_id}/served")
+            assert served_response.status_code == 200
+
+            settled_response = client.post(f"/v1/orders/{order_id}/settled")
+            assert settled_response.status_code == 200
+
             close_response = client.post(f"/v1/restaurants/rst_001/tables/{table_id}/close")
             assert close_response.status_code == 200
 
@@ -71,7 +77,7 @@ def test_websocket_receives_order_transition_events() -> None:
             assert not reader.is_alive(), "timed out waiting for websocket events"
             assert errors.empty(), "unexpected websocket read error"
 
-    raw_messages = [events.get_nowait() for _ in range(5)]
+    raw_messages = [events.get_nowait() for _ in range(7)]
     parsed_messages = [json.loads(message) for message in raw_messages]
     event_types = [message["event_type"] for message in parsed_messages]
     assert event_types == [
@@ -79,6 +85,8 @@ def test_websocket_receives_order_transition_events() -> None:
         "order.placed",
         "order.accepted",
         "order.ready",
+        "order.served",
+        "order.settled",
         "table.closed",
     ]
     placed_event = parsed_messages[1]

@@ -9,6 +9,8 @@ from rop.application.use_cases.accept_order import AcceptOrder
 from rop.application.use_cases.context import TraceContext
 from rop.application.use_cases.kitchen_queue import KitchenQueue
 from rop.application.use_cases.mark_order_ready import MarkOrderReady
+from rop.application.use_cases.mark_order_served import MarkOrderServed
+from rop.application.use_cases.mark_order_settled import MarkOrderSettled
 from rop.domain.common.ids import OrderId, RestaurantId
 from rop.infrastructure.db.repositories.order_repo import SqlAlchemyOrderRepository
 from rop.infrastructure.messaging.redis_publisher import RedisEventPublisher
@@ -32,6 +34,20 @@ def _accept_order_use_case() -> AcceptOrder:
 
 def _mark_order_ready_use_case() -> MarkOrderReady:
     return MarkOrderReady(
+        order_repository=SqlAlchemyOrderRepository(),
+        publisher=RedisEventPublisher(),
+    )
+
+
+def _mark_order_served_use_case() -> MarkOrderServed:
+    return MarkOrderServed(
+        order_repository=SqlAlchemyOrderRepository(),
+        publisher=RedisEventPublisher(),
+    )
+
+
+def _mark_order_settled_use_case() -> MarkOrderSettled:
+    return MarkOrderSettled(
         order_repository=SqlAlchemyOrderRepository(),
         publisher=RedisEventPublisher(),
     )
@@ -70,6 +86,22 @@ def accept_order(order_id: str) -> OrderResponse:
 @router.post("/v1/orders/{order_id}/ready", response_model=OrderResponse)
 def mark_order_ready(order_id: str) -> OrderResponse:
     return _mark_order_ready_use_case().execute(
+        order_id=OrderId(order_id),
+        trace_ctx=TraceContext(trace_id=_current_trace_id(), request_id=get_request_id()),
+    )
+
+
+@router.post("/v1/orders/{order_id}/served", response_model=OrderResponse)
+def mark_order_served(order_id: str) -> OrderResponse:
+    return _mark_order_served_use_case().execute(
+        order_id=OrderId(order_id),
+        trace_ctx=TraceContext(trace_id=_current_trace_id(), request_id=get_request_id()),
+    )
+
+
+@router.post("/v1/orders/{order_id}/settled", response_model=OrderResponse)
+def mark_order_settled(order_id: str) -> OrderResponse:
+    return _mark_order_settled_use_case().execute(
         order_id=OrderId(order_id),
         trace_ctx=TraceContext(trace_id=_current_trace_id(), request_id=get_request_id()),
     )

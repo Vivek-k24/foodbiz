@@ -35,10 +35,30 @@ def test_order_flow_is_persisted() -> None:
         assert ready_response.status_code == 200
         assert ready_response.json()["status"] == "READY"
 
+        invalid_settled_response = client.post(f"/v1/orders/{order_id}/settled")
+        assert invalid_settled_response.status_code == 409
+        assert invalid_settled_response.json()["error"]["code"] == "INVALID_ORDER_TRANSITION"
+
         ready_retry_response = client.post(f"/v1/orders/{order_id}/ready")
         assert ready_retry_response.status_code == 200
         assert ready_retry_response.json()["status"] == "READY"
 
+        served_response = client.post(f"/v1/orders/{order_id}/served")
+        assert served_response.status_code == 200
+        assert served_response.json()["status"] == "SERVED"
+
+        served_retry_response = client.post(f"/v1/orders/{order_id}/served")
+        assert served_retry_response.status_code == 200
+        assert served_retry_response.json()["status"] == "SERVED"
+
+        settled_response = client.post(f"/v1/orders/{order_id}/settled")
+        assert settled_response.status_code == 200
+        assert settled_response.json()["status"] == "SETTLED"
+
+        settled_retry_response = client.post(f"/v1/orders/{order_id}/settled")
+        assert settled_retry_response.status_code == 200
+        assert settled_retry_response.json()["status"] == "SETTLED"
+
         get_response = client.get(f"/v1/orders/{order_id}")
         assert get_response.status_code == 200
-        assert get_response.json()["status"] == "READY"
+        assert get_response.json()["status"] == "SETTLED"

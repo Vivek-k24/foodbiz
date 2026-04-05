@@ -42,8 +42,10 @@ class AcceptOrder:
 
         if order.status == OrderStatus.ACCEPTED:
             return to_order_response(order)
-        if order.status == OrderStatus.READY:
-            raise InvalidOrderTransitionError("cannot accept order from status=READY")
+        if order.status != OrderStatus.PLACED:
+            raise InvalidOrderTransitionError(
+                f"cannot accept order from status={order.status.value}"
+            )
 
         try:
             accepted_order = order.accept()
@@ -62,8 +64,10 @@ class AcceptOrder:
                 raise OrderNotFoundError(f"order {order_id} not found")
             if current.status == OrderStatus.ACCEPTED:
                 return to_order_response(current)
-            if current.status == OrderStatus.READY:
-                raise InvalidOrderTransitionError("cannot accept order from status=READY")
+            if current.status != OrderStatus.PLACED:
+                raise InvalidOrderTransitionError(
+                    f"cannot accept order from status={current.status.value}"
+                )
             raise OrderConflictError(f"order {order_id} status update conflict")
 
         event = OrderAccepted(

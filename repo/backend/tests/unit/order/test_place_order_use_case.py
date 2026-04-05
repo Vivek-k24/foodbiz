@@ -9,8 +9,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
-from rop.application.dto.requests import PlaceOrderLineRequest, PlaceOrderRequest
-from rop.application.dto.requests import PlaceOrderLineModifierRequest
+from rop.application.dto.requests import (
+    PlaceOrderLineModifierRequest,
+    PlaceOrderLineRequest,
+    PlaceOrderRequest,
+)
 from rop.application.ports.repositories import (
     IdempotencyReplayMismatchError as RepoIdempotencyReplayMismatchError,
 )
@@ -306,8 +309,17 @@ def test_place_order_happy_path_persists_allowed_modifiers() -> None:
         menu_repository=FakeMenuRepository(
             _sample_menu(
                 allowed_modifiers=[
-                    AllowedModifier(code="crust", label="Crust", kind="choice", options=["regular", "thin"]),
-                    AllowedModifier(code="extra_mozzarella", label="Extra Mozzarella", kind="toggle"),
+                    AllowedModifier(
+                        code="crust",
+                        label="Crust",
+                        kind="choice",
+                        options=["regular", "thin"],
+                    ),
+                    AllowedModifier(
+                        code="extra_mozzarella",
+                        label="Extra Mozzarella",
+                        kind="toggle",
+                    ),
                 ]
             )
         ),
@@ -347,7 +359,12 @@ def test_place_order_rejects_disallowed_modifier_code() -> None:
         menu_repository=FakeMenuRepository(
             _sample_menu(
                 allowed_modifiers=[
-                    AllowedModifier(code="crust", label="Crust", kind="choice", options=["regular", "thin"])
+                    AllowedModifier(
+                        code="crust",
+                        label="Crust",
+                        kind="choice",
+                        options=["regular", "thin"],
+                    )
                 ]
             )
         ),
@@ -378,7 +395,12 @@ def test_place_order_rejects_invalid_choice_value() -> None:
         menu_repository=FakeMenuRepository(
             _sample_menu(
                 allowed_modifiers=[
-                    AllowedModifier(code="crust", label="Crust", kind="choice", options=["regular", "thin"])
+                    AllowedModifier(
+                        code="crust",
+                        label="Crust",
+                        kind="choice",
+                        options=["regular", "thin"],
+                    )
                 ]
             )
         ),
@@ -392,7 +414,13 @@ def test_place_order_rejects_invalid_choice_value() -> None:
             restaurant_id=RestaurantId("rst_001"),
             table_id=TableId("tbl_001"),
             request_dto=_request(
-                modifiers=[PlaceOrderLineModifierRequest(code="crust", label="Crust", value="stuffed")]
+                modifiers=[
+                    PlaceOrderLineModifierRequest(
+                        code="crust",
+                        label="Crust",
+                        value="stuffed",
+                    )
+                ]
             ),
             trace_ctx=TraceContext(trace_id=None, request_id=None),
         )

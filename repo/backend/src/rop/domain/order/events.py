@@ -30,3 +30,19 @@ class OrderReady:
     restaurant_id: RestaurantId
     table_id: TableId
     occurred_at: datetime
+
+
+@dataclass(frozen=True)
+class OrderServed:
+    order_id: OrderId
+    restaurant_id: RestaurantId
+    table_id: TableId
+    occurred_at: datetime
+
+
+@dataclass(frozen=True)
+class OrderSettled:
+    order_id: OrderId
+    restaurant_id: RestaurantId
+    table_id: TableId
+    occurred_at: datetime
