@@ -67,6 +67,15 @@ def serialize_order_event(
                         "currency": line.line_total.currency,
                     },
                     "notes": line.notes,
+                    "modifiers": [
+                        {
+                            "code": modifier.code,
+                            "label": modifier.label,
+                            "value": modifier.value,
+                        }
+                        for modifier in line.modifiers
+                    ]
+                    or None,
                 }
                 for line in order.lines
             ],

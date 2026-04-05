@@ -37,7 +37,23 @@ def test_websocket_receives_order_transition_events() -> None:
 
             place_response = client.post(
                 f"/v1/restaurants/rst_001/tables/{table_id}/orders",
-                json={"lines": [{"itemId": "itm_001", "quantity": 1}]},
+                json={
+                    "lines": [
+                        {
+                            "itemId": "itm_001",
+                            "quantity": 1,
+                            "notes": "share plates",
+                            "modifiers": [
+                                {
+                                    "code": "extra_mozzarella",
+                                    "label": "Extra Mozzarella",
+                                    "value": "true",
+                                },
+                                {"code": "crust", "label": "Crust", "value": "gluten_free"},
+                            ],
+                        }
+                    ]
+                },
             )
             assert place_response.status_code == 201
             order_id = place_response.json()["orderId"]
@@ -56,7 +72,8 @@ def test_websocket_receives_order_transition_events() -> None:
             assert errors.empty(), "unexpected websocket read error"
 
     raw_messages = [events.get_nowait() for _ in range(5)]
-    event_types = [json.loads(message)["event_type"] for message in raw_messages]
+    parsed_messages = [json.loads(message) for message in raw_messages]
+    event_types = [message["event_type"] for message in parsed_messages]
     assert event_types == [
         "table.opened",
         "order.placed",
@@ -64,3 +81,8 @@ def test_websocket_receives_order_transition_events() -> None:
         "order.ready",
         "table.closed",
     ]
+    placed_event = parsed_messages[1]
+    assert placed_event["payload"]["orderId"] == order_id
+    assert placed_event["payload"]["lines"][0]["notes"] == "share plates"
+    assert placed_event["payload"]["lines"][0]["modifiers"][0]["code"] == "extra_mozzarella"
+    assert placed_event["payload"]["lines"][0]["modifiers"][1]["value"] == "gluten_free"

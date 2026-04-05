@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from rop.infrastructure.db.models.menu import Base
@@ -69,5 +71,6 @@ class OrderLineModel(Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     line_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    modifiers_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
     order: Mapped[OrderModel] = relationship(back_populates="lines")

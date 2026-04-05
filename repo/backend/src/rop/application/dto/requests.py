@@ -15,10 +15,17 @@ class CamelBaseModel(BaseModel):
     )
 
 
+class PlaceOrderLineModifierRequest(CamelBaseModel):
+    code: str
+    label: str
+    value: str
+
+
 class PlaceOrderLineRequest(CamelBaseModel):
     item_id: str
     quantity: int
     notes: str | None = None
+    modifiers: list[PlaceOrderLineModifierRequest] | None = None
 
 
 class PlaceOrderRequest(CamelBaseModel):

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from rop.application.dto.responses import MenuItemResponse, MenuResponse, MoneyResponse
+from rop.application.dto.responses import (
+    AllowedModifierResponse,
+    MenuItemResponse,
+    MenuResponse,
+    MoneyResponse,
+)
 from rop.domain.menu.entities import Menu
 
 
@@ -16,6 +21,16 @@ def to_menu_response(menu: Menu) -> MenuResponse:
             ),
             isAvailable=item.is_available,
             categoryId=item.category_id,
+            allowedModifiers=[
+                AllowedModifierResponse(
+                    code=modifier.code,
+                    label=modifier.label,
+                    kind=modifier.kind,
+                    options=modifier.options or None,
+                )
+                for modifier in item.allowed_modifiers
+            ]
+            or None,
         )
         for item in menu.items
     ]

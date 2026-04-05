@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rop.application.dto.responses import (
     MoneyResponse,
+    OrderLineModifierResponse,
     OrderLineResponse,
     OrderResponse,
 )
@@ -29,6 +30,15 @@ def to_order_response(order: Order) -> OrderResponse:
                     currency=line.line_total.currency,
                 ),
                 notes=line.notes,
+                modifiers=[
+                    OrderLineModifierResponse(
+                        code=modifier.code,
+                        label=modifier.label,
+                        value=modifier.value,
+                    )
+                    for modifier in line.modifiers
+                ]
+                or None,
             )
             for line in order.lines
         ],

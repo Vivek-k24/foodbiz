@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from rop.application.dto.requests import PlaceOrderRequest
+from rop.application.dto.requests import PlaceOrderLineModifierRequest, PlaceOrderRequest
 from rop.application.dto.responses import OrderResponse
 from rop.application.mappers.event_envelope import serialize_order_event
 from rop.application.mappers.order_mapper import to_order_response
@@ -22,8 +22,10 @@ from rop.application.ports.repositories import (
 from rop.application.use_cases.context import TraceContext
 from rop.domain.common.ids import OrderId, OrderLineId, RestaurantId, TableId
 from rop.domain.common.money import Money
+from rop.domain.menu.entities import AllowedModifier, MenuItem
 from rop.domain.order.entities import OrderLine, create_placed_order
 from rop.domain.order.events import OrderPlaced
+from rop.domain.order.value_objects import OrderLineModifier
 from rop.domain.table.entities import TableClosedError
 
 
@@ -44,6 +46,14 @@ class MenuItemUnavailableError(Exception):
 
 
 class IdempotencyReplayMismatchError(Exception):
+    pass
+
+
+class InvalidModifierError(Exception):
+    pass
+
+
+class InvalidModifierValueError(Exception):
     pass
 
 
@@ -108,6 +118,7 @@ class PlaceOrder:
                     unit_price=unit_price,
                     line_total=line_total,
                     notes=request_line.notes,
+                    modifiers=_validated_modifiers(menu_item, request_line.modifiers),
                 )
             )
 
@@ -165,3 +176,61 @@ def _request_hash(request_dto: PlaceOrderRequest) -> str:
     normalized_payload = request_dto.model_dump(mode="json", by_alias=True, exclude_none=False)
     canonical = json.dumps(normalized_payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validated_modifiers(
+    menu_item: MenuItem,
+    request_modifiers: list[PlaceOrderLineModifierRequest] | None,
+) -> list[OrderLineModifier]:
+    allowed_by_code = {modifier.code: modifier for modifier in menu_item.allowed_modifiers}
+    selected_modifiers: list[OrderLineModifier] = []
+    seen_codes: set[str] = set()
+
+    for request_modifier in request_modifiers or []:
+        code = request_modifier.code.strip()
+        if not code:
+            raise InvalidModifierError("modifier code must be non-empty")
+        if code in seen_codes:
+            raise InvalidModifierError(
+                f"modifier {code} was provided more than once for item {menu_item.item_id}"
+            )
+        seen_codes.add(code)
+
+        allowed_modifier = allowed_by_code.get(code)
+        if allowed_modifier is None:
+            raise InvalidModifierError(
+                f"modifier {code} is not allowed for item {menu_item.item_id}"
+            )
+
+        selected_modifiers.append(
+            OrderLineModifier(
+                code=allowed_modifier.code,
+                label=allowed_modifier.label,
+                value=_validated_modifier_value(allowed_modifier, request_modifier.value),
+            )
+        )
+
+    return selected_modifiers
+
+
+def _validated_modifier_value(allowed_modifier: AllowedModifier, raw_value: str) -> str:
+    if allowed_modifier.kind == "toggle":
+        if raw_value not in {"true", "false"}:
+            raise InvalidModifierValueError(
+                f"modifier {allowed_modifier.code} must be 'true' or 'false'"
+            )
+        return raw_value
+
+    if allowed_modifier.kind == "choice":
+        if raw_value not in allowed_modifier.options:
+            raise InvalidModifierValueError(
+                f"modifier {allowed_modifier.code} must be one of {allowed_modifier.options}"
+            )
+        return raw_value
+
+    normalized_value = raw_value.strip()
+    if not normalized_value or len(normalized_value) > 80:
+        raise InvalidModifierValueError(
+            f"modifier {allowed_modifier.code} text must be between 1 and 80 characters"
+        )
+    return normalized_value

@@ -23,3 +23,12 @@ Thumbs.db
 node_modules/
 frontend/**/node_modules/
 frontend/**/dist/
+
+# pytest / test temp
+pytest-temp/
+tmp/pytest-of-*/
+**/.pytest_cache/
+
+# general temp
+tmp/
+*.tmp

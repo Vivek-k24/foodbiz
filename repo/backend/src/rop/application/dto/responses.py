@@ -10,6 +10,13 @@ class MoneyResponse(BaseModel):
     currency: str
 
 
+class AllowedModifierResponse(BaseModel):
+    code: str
+    label: str
+    kind: str
+    options: list[str] | None = None
+
+
 class MenuItemResponse(BaseModel):
     itemId: str
     name: str
@@ -17,6 +24,7 @@ class MenuItemResponse(BaseModel):
     priceMoney: MoneyResponse
     isAvailable: bool
     categoryId: str | None = None
+    allowedModifiers: list[AllowedModifierResponse] | None = None
 
 
 class MenuResponse(BaseModel):
@@ -28,6 +36,12 @@ class MenuResponse(BaseModel):
     updatedAt: datetime
 
 
+class OrderLineModifierResponse(BaseModel):
+    code: str
+    label: str
+    value: str
+
+
 class OrderLineResponse(BaseModel):
     lineId: str
     itemId: str
@@ -36,6 +50,7 @@ class OrderLineResponse(BaseModel):
     unitPrice: MoneyResponse
     lineTotal: MoneyResponse
     notes: str | None = None
+    modifiers: list[OrderLineModifierResponse] | None = None
 
 
 class OrderResponse(BaseModel):
