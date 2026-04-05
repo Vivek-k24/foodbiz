@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 from rop.application.dto.requests import PlaceOrderLineRequest, PlaceOrderRequest
+from rop.application.dto.requests import PlaceOrderLineModifierRequest
 from rop.application.ports.repositories import (
     IdempotencyReplayMismatchError as RepoIdempotencyReplayMismatchError,
 )
@@ -17,13 +18,15 @@ from rop.application.ports.repositories import TableOrderSummaryData
 from rop.application.use_cases.context import TraceContext
 from rop.application.use_cases.place_order import (
     IdempotencyReplayMismatchError,
+    InvalidModifierError,
+    InvalidModifierValueError,
     MenuItemUnavailableError,
     PlaceOrder,
     TableNotOpenError,
 )
 from rop.domain.common.ids import MenuId, MenuItemId, RestaurantId, TableId
 from rop.domain.common.money import Money
-from rop.domain.menu.entities import Menu, MenuItem
+from rop.domain.menu.entities import AllowedModifier, Menu, MenuItem
 from rop.domain.order.entities import Order, OrderStatus
 from rop.domain.table.entities import Table, TableStatus
 
@@ -172,7 +175,11 @@ class FakePublisher:
         self.calls.append(PublishCall(channel=channel, message=message))
 
 
-def _sample_menu(item_available: bool = True) -> Menu:
+def _sample_menu(
+    item_available: bool = True,
+    *,
+    allowed_modifiers: list[AllowedModifier] | None = None,
+) -> Menu:
     return Menu(
         menu_id=MenuId("men_001"),
         restaurant_id=RestaurantId("rst_001"),
@@ -185,6 +192,7 @@ def _sample_menu(item_available: bool = True) -> Menu:
                 description=None,
                 price_money=Money(amount_cents=1450, currency="USD"),
                 is_available=item_available,
+                allowed_modifiers=allowed_modifiers or [],
             )
         ],
         updated_at=datetime.now(timezone.utc),
@@ -202,8 +210,22 @@ def _table(status: TableStatus) -> Table:
     )
 
 
-def _request(quantity: int = 1) -> PlaceOrderRequest:
-    return PlaceOrderRequest(lines=[PlaceOrderLineRequest(item_id="itm_001", quantity=quantity)])
+def _request(
+    quantity: int = 1,
+    *,
+    notes: str | None = None,
+    modifiers: list[PlaceOrderLineModifierRequest] | None = None,
+) -> PlaceOrderRequest:
+    return PlaceOrderRequest(
+        lines=[
+            PlaceOrderLineRequest(
+                item_id="itm_001",
+                quantity=quantity,
+                notes=notes,
+                modifiers=modifiers,
+            )
+        ]
+    )
 
 
 def test_place_order_rejects_closed_table() -> None:
@@ -276,6 +298,104 @@ def test_place_order_happy_path_persists_and_publishes() -> None:
     assert len(publisher.calls) == 1
     assert publisher.calls[0].channel == "events:rst_001"
     assert '"event_type":"order.placed"' in publisher.calls[0].message
+
+
+def test_place_order_happy_path_persists_allowed_modifiers() -> None:
+    order_repository = FakeOrderRepository()
+    use_case = PlaceOrder(
+        menu_repository=FakeMenuRepository(
+            _sample_menu(
+                allowed_modifiers=[
+                    AllowedModifier(code="crust", label="Crust", kind="choice", options=["regular", "thin"]),
+                    AllowedModifier(code="extra_mozzarella", label="Extra Mozzarella", kind="toggle"),
+                ]
+            )
+        ),
+        table_repository=FakeTableRepository(_table(TableStatus.OPEN)),
+        order_repository=order_repository,
+        publisher=FakePublisher(),
+    )
+
+    response = use_case.execute(
+        restaurant_id=RestaurantId("rst_001"),
+        table_id=TableId("tbl_001"),
+        request_dto=_request(
+            quantity=1,
+            notes="cut into squares",
+            modifiers=[
+                PlaceOrderLineModifierRequest(code="crust", label="Crust", value="thin"),
+                PlaceOrderLineModifierRequest(
+                    code="extra_mozzarella",
+                    label="Extra Mozzarella",
+                    value="true",
+                ),
+            ],
+        ),
+        trace_ctx=TraceContext(trace_id="trace-1", request_id="req-1"),
+    )
+
+    assert response.lines[0].notes == "cut into squares"
+    assert response.lines[0].modifiers is not None
+    assert response.lines[0].modifiers[0].code == "crust"
+    assert response.lines[0].modifiers[0].value == "thin"
+    assert response.lines[0].modifiers[1].code == "extra_mozzarella"
+    assert response.lines[0].modifiers[1].value == "true"
+
+
+def test_place_order_rejects_disallowed_modifier_code() -> None:
+    use_case = PlaceOrder(
+        menu_repository=FakeMenuRepository(
+            _sample_menu(
+                allowed_modifiers=[
+                    AllowedModifier(code="crust", label="Crust", kind="choice", options=["regular", "thin"])
+                ]
+            )
+        ),
+        table_repository=FakeTableRepository(_table(TableStatus.OPEN)),
+        order_repository=FakeOrderRepository(),
+        publisher=FakePublisher(),
+    )
+
+    with pytest.raises(InvalidModifierError):
+        use_case.execute(
+            restaurant_id=RestaurantId("rst_001"),
+            table_id=TableId("tbl_001"),
+            request_dto=_request(
+                modifiers=[
+                    PlaceOrderLineModifierRequest(
+                        code="extra_mozzarella",
+                        label="Extra Mozzarella",
+                        value="true",
+                    )
+                ]
+            ),
+            trace_ctx=TraceContext(trace_id=None, request_id=None),
+        )
+
+
+def test_place_order_rejects_invalid_choice_value() -> None:
+    use_case = PlaceOrder(
+        menu_repository=FakeMenuRepository(
+            _sample_menu(
+                allowed_modifiers=[
+                    AllowedModifier(code="crust", label="Crust", kind="choice", options=["regular", "thin"])
+                ]
+            )
+        ),
+        table_repository=FakeTableRepository(_table(TableStatus.OPEN)),
+        order_repository=FakeOrderRepository(),
+        publisher=FakePublisher(),
+    )
+
+    with pytest.raises(InvalidModifierValueError):
+        use_case.execute(
+            restaurant_id=RestaurantId("rst_001"),
+            table_id=TableId("tbl_001"),
+            request_dto=_request(
+                modifiers=[PlaceOrderLineModifierRequest(code="crust", label="Crust", value="stuffed")]
+            ),
+            trace_ctx=TraceContext(trace_id=None, request_id=None),
+        )
 
 
 def test_place_order_idempotency_returns_same_order_for_same_payload() -> None:

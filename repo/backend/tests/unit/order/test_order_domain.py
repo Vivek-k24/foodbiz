@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 from rop.domain.common.ids import MenuItemId, OrderId, OrderLineId, RestaurantId, TableId
 from rop.domain.common.money import Money
 from rop.domain.order.entities import Order, OrderLine, OrderStatus, create_placed_order
+from rop.domain.order.value_objects import OrderLineModifier
 
 
 def test_order_line_quantity_must_be_gte_one() -> None:
@@ -23,6 +24,7 @@ def test_order_line_quantity_must_be_gte_one() -> None:
             unit_price=Money(amount_cents=100, currency="USD"),
             line_total=Money(amount_cents=0, currency="USD"),
             notes=None,
+            modifiers=[],
         )
 
 
@@ -35,6 +37,7 @@ def test_order_total_must_match_lines() -> None:
         unit_price=Money(amount_cents=100, currency="USD"),
         line_total=Money(amount_cents=100, currency="USD"),
         notes=None,
+        modifiers=[],
     )
     with pytest.raises(ValueError):
         Order(
@@ -59,6 +62,7 @@ def test_create_placed_order_calculates_total() -> None:
             unit_price=Money(amount_cents=300, currency="USD"),
             line_total=Money(amount_cents=600, currency="USD"),
             notes=None,
+            modifiers=[],
         ),
         OrderLine(
             line_id=OrderLineId("orl_002"),
@@ -68,6 +72,7 @@ def test_create_placed_order_calculates_total() -> None:
             unit_price=Money(amount_cents=250, currency="USD"),
             line_total=Money(amount_cents=250, currency="USD"),
             notes=None,
+            modifiers=[],
         ),
     ]
     order = create_placed_order(
@@ -93,6 +98,7 @@ def test_order_transition_methods() -> None:
             unit_price=Money(amount_cents=300, currency="USD"),
             line_total=Money(amount_cents=300, currency="USD"),
             notes=None,
+            modifiers=[],
         )
     ]
     order = create_placed_order(
@@ -118,6 +124,7 @@ def test_order_version_must_be_positive() -> None:
         unit_price=Money(amount_cents=100, currency="USD"),
         line_total=Money(amount_cents=100, currency="USD"),
         notes=None,
+        modifiers=[],
     )
     with pytest.raises(ValueError):
         Order(
@@ -130,3 +137,11 @@ def test_order_version_must_be_positive() -> None:
             created_at=datetime.now(timezone.utc),
             version=0,
         )
+
+
+def test_order_line_modifier_requires_non_empty_code_and_label() -> None:
+    with pytest.raises(ValueError):
+        OrderLineModifier(code="", label="Extra Mozzarella", value="true")
+
+    with pytest.raises(ValueError):
+        OrderLineModifier(code="extra_mozzarella", label="", value="true")

@@ -17,6 +17,7 @@ from rop.application.ports.repositories import (
 from rop.domain.common.ids import MenuItemId, OrderId, OrderLineId, RestaurantId, TableId
 from rop.domain.common.money import Money
 from rop.domain.order.entities import Order, OrderLine, OrderStatus
+from rop.domain.order.value_objects import OrderLineModifier
 from rop.infrastructure.db.models.order import OrderLineModel, OrderModel
 from rop.infrastructure.db.session import get_engine
 
@@ -329,6 +330,15 @@ class SqlAlchemyOrderRepository(OrderRepository):
                 currency=line.unit_price.currency,
                 line_total_cents=line.line_total.amount_cents,
                 notes=line.notes,
+                modifiers_json=[
+                    {
+                        "code": modifier.code,
+                        "label": modifier.label,
+                        "value": modifier.value,
+                    }
+                    for modifier in line.modifiers
+                ]
+                or None,
             )
             for line in order.lines
         ]
@@ -348,6 +358,15 @@ class SqlAlchemyOrderRepository(OrderRepository):
                 unit_price=Money(amount_cents=line.unit_price_cents, currency=line.currency),
                 line_total=Money(amount_cents=line.line_total_cents, currency=line.currency),
                 notes=line.notes,
+                modifiers=[
+                    OrderLineModifier(
+                        code=str(modifier["code"]),
+                        label=str(modifier["label"]),
+                        value=str(modifier["value"]),
+                    )
+                    for modifier in (line.modifiers_json or [])
+                    if isinstance(modifier, dict)
+                ],
             )
             for line in model.lines
         ]

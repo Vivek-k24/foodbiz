@@ -26,7 +26,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -42,6 +44,7 @@ button {
 
 .header,
 .cardHeader,
+.sectionHeader,
 .rowHeader,
 .controlGrid,
 .pageGrid,
@@ -166,6 +169,12 @@ button {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.sectionStack,
+.sidebarStack {
+  display: grid;
+  gap: 16px;
+}
+
 .fieldGroup {
   display: grid;
   gap: 8px;
@@ -186,6 +195,11 @@ button {
 
 .btn:hover {
   background: #efefef;
+}
+
+.btnPrimary:hover {
+  background: #222222;
+  color: #ffffff;
 }
 
 .btn:active {
@@ -221,6 +235,15 @@ button {
   padding: 16px;
 }
 
+.cartLine {
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  border-radius: 16px;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
 .rowHeader {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
@@ -242,6 +265,90 @@ button {
   margin-top: 6px;
   font-weight: 700;
   color: var(--text);
+}
+
+.summaryBar,
+.cartQuantityRow,
+.quantityControls,
+.modifierChips {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.summaryBar,
+.cartQuantityRow {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.quantityControls {
+  align-items: center;
+}
+
+.quantityValue {
+  min-width: 28px;
+  text-align: center;
+}
+
+.modifierGroup {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.textArea {
+  min-height: 84px;
+  resize: vertical;
+}
+
+.orderLineList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.orderLineItem {
+  color: var(--text);
+}
+
+.modifierChips {
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.modifierChip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  background: #f1f1f1;
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.lineNotes {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
 }
 
 .chipPlaced {
@@ -293,7 +400,8 @@ button {
   .pageGrid,
   .controlGrid,
   .statsGrid,
-  .rowHeader {
+  .rowHeader,
+  .modifierGroup {
     grid-template-columns: 1fr;
   }
 

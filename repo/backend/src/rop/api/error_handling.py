@@ -35,6 +35,8 @@ from rop.application.use_cases.mark_order_ready import OrderNotFoundError as Rea
 from rop.application.use_cases.open_table import TableNotFoundError as GetTableNotFoundError
 from rop.application.use_cases.place_order import (
     IdempotencyReplayMismatchError,
+    InvalidModifierError,
+    InvalidModifierValueError,
     MenuItemUnavailableError,
     TableNotOpenError,
 )
@@ -123,6 +125,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         (TableNotOpenForCloseError, 409, "TABLE_NOT_OPEN"),
         (TableCloseBlockedError, 409, "TABLE_CLOSE_BLOCKED"),
         (MenuItemUnavailableError, 400, "MENU_ITEM_UNAVAILABLE"),
+        (InvalidModifierError, 400, "INVALID_MODIFIER"),
+        (InvalidModifierValueError, 400, "INVALID_MODIFIER_VALUE"),
         (
             IdempotencyReplayMismatchError,
             409,

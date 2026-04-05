@@ -11,6 +11,13 @@ type OrderLinePayload = {
   name: string;
   quantity: number;
   notes?: string | null;
+  modifiers?: OrderLineModifierPayload[] | null;
+};
+
+type OrderLineModifierPayload = {
+  code: string;
+  label: string;
+  value: string;
 };
 
 type OrderPayload = {
@@ -206,6 +213,10 @@ function getOrderStatusChipClass(status: string): string {
 
 function getTableStatusChipClass(status: string): string {
   return status === "OPEN" ? "chip chipOpen" : "chip chipClosed";
+}
+
+function formatModifierValue(modifier: OrderLineModifierPayload): string {
+  return modifier.value === "true" ? modifier.label : `${modifier.label}: ${modifier.value}`;
 }
 
 async function readApiError(response: Response): Promise<ApiError> {
@@ -763,6 +774,18 @@ function App() {
                                   <div>
                                     <span className="mono">{line.quantity}x</span> {line.name}
                                   </div>
+                                  {Array.isArray(line.modifiers) && line.modifiers.length > 0 ? (
+                                    <div className="modifierChips">
+                                      {line.modifiers.map((modifier) => (
+                                        <span
+                                          key={`${line.lineId}-${modifier.code}-${modifier.value}`}
+                                          className="modifierChip"
+                                        >
+                                          {formatModifierValue(modifier)}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : null}
                                   {typeof line.notes === "string" && line.notes.trim() ? (
                                     <p className="lineNotes">Notes: {line.notes}</p>
                                   ) : null}

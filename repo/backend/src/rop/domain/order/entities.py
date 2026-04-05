@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 
 from rop.domain.common.ids import MenuItemId, OrderId, OrderLineId, RestaurantId, TableId
 from rop.domain.common.money import Money
+from rop.domain.order.value_objects import OrderLineModifier
 
 
 class OrderStatus(str, Enum):
@@ -23,6 +24,7 @@ class OrderLine:
     unit_price: Money
     line_total: Money
     notes: str | None
+    modifiers: list[OrderLineModifier] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.quantity < 1:
