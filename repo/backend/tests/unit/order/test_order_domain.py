@@ -113,6 +113,38 @@ def test_order_transition_methods() -> None:
     assert accepted.status == OrderStatus.ACCEPTED
     ready = accepted.mark_ready()
     assert ready.status == OrderStatus.READY
+    served = ready.mark_served()
+    assert served.status == OrderStatus.SERVED
+    settled = served.mark_settled()
+    assert settled.status == OrderStatus.SETTLED
+
+
+def test_invalid_post_ready_transitions_raise() -> None:
+    now = datetime.now(timezone.utc)
+    line = OrderLine(
+        line_id=OrderLineId("orl_001"),
+        item_id=MenuItemId("itm_001"),
+        name="Item 1",
+        quantity=1,
+        unit_price=Money(amount_cents=300, currency="USD"),
+        line_total=Money(amount_cents=300, currency="USD"),
+        notes=None,
+        modifiers=[],
+    )
+    placed = create_placed_order(
+        order_id=OrderId("ord_001"),
+        restaurant_id=RestaurantId("rst_001"),
+        table_id=TableId("tbl_001"),
+        lines=[line],
+        now=now,
+    )
+
+    with pytest.raises(Exception):
+        placed.mark_served()
+
+    ready = placed.accept().mark_ready()
+    with pytest.raises(Exception):
+        ready.mark_settled()
 
 
 def test_order_version_must_be_positive() -> None:

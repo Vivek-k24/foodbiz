@@ -106,14 +106,14 @@ type ApiError = {
   message: string;
 };
 
-type StatusTab = "PLACED" | "ACCEPTED" | "READY";
+type StatusTab = "PLACED" | "ACCEPTED" | "READY" | "SERVED";
 type TablesFilter = "ALL" | "OPEN" | "CLOSED";
 type DashboardView = "KITCHEN" | "TABLES";
 type TableAction = "open" | "place" | "close" | null;
 
 const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-const kitchenStatuses: readonly StatusTab[] = ["PLACED", "ACCEPTED", "READY"];
+const kitchenStatuses: readonly StatusTab[] = ["PLACED", "ACCEPTED", "READY", "SERVED"];
 
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) {
@@ -206,8 +206,27 @@ function getOrderStatusChipClass(status: string): string {
       return "chip chipAccepted";
     case "READY":
       return "chip chipReady";
+    case "SERVED":
+      return "chip chipServed";
+    case "SETTLED":
+      return "chip chipSettled";
     default:
       return "chip";
+  }
+}
+
+function getOrderCardClass(status: string): string {
+  switch (status) {
+    case "PLACED":
+      return "orderCard orderCardPlaced";
+    case "ACCEPTED":
+      return "orderCard orderCardAccepted";
+    case "READY":
+      return "orderCard orderCardReady";
+    case "SERVED":
+      return "orderCard orderCardServed";
+    default:
+      return "orderCard";
   }
 }
 
@@ -430,9 +449,16 @@ function App() {
   }
   async function handleOrderAction(
     order: OrderPayload,
-    action: "accept" | "ready"
+    action: "accept" | "ready" | "served" | "settled"
   ): Promise<void> {
-    const nextStatus = action === "accept" ? "ACCEPTED" : "READY";
+    const nextStatus =
+      action === "accept"
+        ? "ACCEPTED"
+        : action === "ready"
+          ? "READY"
+          : action === "served"
+            ? "SERVED"
+            : "SETTLED";
     const previousStatus = order.status;
 
     setOrderActionPending((current) => ({ ...current, [order.orderId]: true }));
@@ -552,6 +578,7 @@ function App() {
           PLACED: [],
           ACCEPTED: [],
           READY: [],
+          SERVED: [],
         }
       ),
     [orders]
@@ -714,7 +741,7 @@ function App() {
             <div>
               <h2 className="sectionTitle">Kitchen Board</h2>
               <p className="hint">
-                All active orders stay visible at once so the kitchen can scan, accept, and mark ready without extra clicks.
+                All active orders stay visible at once so the team can scan, accept, mark ready, serve, and settle without extra clicks.
               </p>
             </div>
             <button type="button" className="btn btnSecondary btnSmall" onClick={() => void loadKitchenBoard()}>
@@ -749,7 +776,7 @@ function App() {
                       const errorMessage = orderActionError[order.orderId];
 
                       return (
-                        <article key={order.orderId} className="orderCard">
+                        <article key={order.orderId} className={getOrderCardClass(order.status)}>
                           <div className="rowHeader">
                             <div>
                               <div className="rowTitle mono">{order.orderId}</div>
@@ -815,6 +842,26 @@ function App() {
                                 disabled={isPending}
                               >
                                 {isPending ? "Updating…" : "Mark Ready"}
+                              </button>
+                            ) : null}
+                            {order.status === "READY" ? (
+                              <button
+                                type="button"
+                                className="btn btnSecondary btnSmall"
+                                onClick={() => void handleOrderAction(order, "served")}
+                                disabled={isPending}
+                              >
+                                {isPending ? "Updating…" : "Mark Served"}
+                              </button>
+                            ) : null}
+                            {order.status === "SERVED" ? (
+                              <button
+                                type="button"
+                                className="btn btnSecondary btnSmall"
+                                onClick={() => void handleOrderAction(order, "settled")}
+                                disabled={isPending}
+                              >
+                                {isPending ? "Updating…" : "Mark Settled"}
                               </button>
                             ) : null}
                           </div>

@@ -158,6 +158,10 @@ function getOrderStatusChipClass(status: string): string {
       return "chip chipAccepted";
     case "READY":
       return "chip chipReady";
+    case "SERVED":
+      return "chip chipServed";
+    case "SETTLED":
+      return "chip chipSettled";
     default:
       return "chip";
   }

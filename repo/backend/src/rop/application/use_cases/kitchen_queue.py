@@ -12,6 +12,8 @@ _STATUS_MAP: dict[str, OrderStatus | None] = {
     "PLACED": OrderStatus.PLACED,
     "ACCEPTED": OrderStatus.ACCEPTED,
     "READY": OrderStatus.READY,
+    "SERVED": OrderStatus.SERVED,
+    "SETTLED": OrderStatus.SETTLED,
 }
 
 

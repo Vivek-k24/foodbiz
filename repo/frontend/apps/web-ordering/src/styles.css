@@ -368,6 +368,18 @@ button {
   color: #222222;
 }
 
+.chipServed {
+  background: #8d8d8d;
+  border-color: #666666;
+  color: #111111;
+}
+
+.chipSettled {
+  background: #5f5f5f;
+  border-color: #4a4a4a;
+  color: #ffffff;
+}
+
 .errorBox,
 .infoBox,
 .emptyState {

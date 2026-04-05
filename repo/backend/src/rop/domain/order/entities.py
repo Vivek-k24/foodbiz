@@ -13,6 +13,8 @@ class OrderStatus(str, Enum):
     PLACED = "PLACED"
     ACCEPTED = "ACCEPTED"
     READY = "READY"
+    SERVED = "SERVED"
+    SETTLED = "SETTLED"
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,16 @@ class Order:
         if self.status != OrderStatus.ACCEPTED:
             raise OrderTransitionError(f"cannot mark ready from status={self.status.value}")
         return replace(self, status=OrderStatus.READY)
+
+    def mark_served(self) -> Order:
+        if self.status != OrderStatus.READY:
+            raise OrderTransitionError(f"cannot mark served from status={self.status.value}")
+        return replace(self, status=OrderStatus.SERVED)
+
+    def mark_settled(self) -> Order:
+        if self.status != OrderStatus.SERVED:
+            raise OrderTransitionError(f"cannot mark settled from status={self.status.value}")
+        return replace(self, status=OrderStatus.SETTLED)
 
 
 def create_placed_order(

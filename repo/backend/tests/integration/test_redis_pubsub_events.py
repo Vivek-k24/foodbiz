@@ -45,6 +45,16 @@ def test_redis_pubsub_emits_events_for_order_transitions() -> None:
         assert accept_response.status_code == 200
         ready_response = client.post(f"/v1/orders/{order_id}/ready")
         assert ready_response.status_code == 200
+        served_response = client.post(f"/v1/orders/{order_id}/served")
+        assert served_response.status_code == 200
+        settled_response = client.post(f"/v1/orders/{order_id}/settled")
+        assert settled_response.status_code == 200
 
-    event_types = _pull_event_types(pubsub, count=3, timeout_seconds=2.0)
-    assert event_types == ["order.placed", "order.accepted", "order.ready"]
+    event_types = _pull_event_types(pubsub, count=5, timeout_seconds=2.0)
+    assert event_types == [
+        "order.placed",
+        "order.accepted",
+        "order.ready",
+        "order.served",
+        "order.settled",
+    ]

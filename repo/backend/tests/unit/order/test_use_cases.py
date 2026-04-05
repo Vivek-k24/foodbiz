@@ -24,6 +24,18 @@ from rop.application.use_cases.mark_order_ready import (
 from rop.application.use_cases.mark_order_ready import (
     MarkOrderReady,
 )
+from rop.application.use_cases.mark_order_served import (
+    InvalidOrderTransitionError as ServedTransitionError,
+)
+from rop.application.use_cases.mark_order_served import (
+    MarkOrderServed,
+)
+from rop.application.use_cases.mark_order_settled import (
+    InvalidOrderTransitionError as SettledTransitionError,
+)
+from rop.application.use_cases.mark_order_settled import (
+    MarkOrderSettled,
+)
 from rop.application.use_cases.place_order import PlaceOrder
 from rop.domain.common.ids import MenuId, MenuItemId, OrderId, RestaurantId, TableId
 from rop.domain.common.money import Money
@@ -213,8 +225,26 @@ def test_order_use_case_transitions_and_publishes() -> None:
     )
     assert ready.status == "READY"
 
+    served = MarkOrderServed(order_repository=order_repository, publisher=publisher).execute(
+        order_id=OrderId(ready.orderId),
+        trace_ctx=TraceContext(trace_id="trace-4", request_id="req-4"),
+    )
+    assert served.status == "SERVED"
+
+    settled = MarkOrderSettled(order_repository=order_repository, publisher=publisher).execute(
+        order_id=OrderId(served.orderId),
+        trace_ctx=TraceContext(trace_id="trace-5", request_id="req-5"),
+    )
+    assert settled.status == "SETTLED"
+
     event_types = [json.loads(message)["event_type"] for _, message in publisher.messages]
-    assert event_types == ["order.placed", "order.accepted", "order.ready"]
+    assert event_types == [
+        "order.placed",
+        "order.accepted",
+        "order.ready",
+        "order.served",
+        "order.settled",
+    ]
     assert all(channel == "events:rst_001" for channel, _ in publisher.messages)
 
 
@@ -259,8 +289,43 @@ def test_invalid_transitions_raise() -> None:
     )
     assert ready_again.status == "READY"
 
+    with pytest.raises(SettledTransitionError):
+        MarkOrderSettled(order_repository=order_repository, publisher=publisher).execute(
+            order_id=OrderId(ready.orderId),
+            trace_ctx=TraceContext(trace_id=None, request_id=None),
+        )
+
+    served = MarkOrderServed(order_repository=order_repository, publisher=publisher).execute(
+        order_id=OrderId(ready.orderId),
+        trace_ctx=TraceContext(trace_id=None, request_id=None),
+    )
+    served_again = MarkOrderServed(order_repository=order_repository, publisher=publisher).execute(
+        order_id=OrderId(served.orderId),
+        trace_ctx=TraceContext(trace_id=None, request_id=None),
+    )
+    assert served_again.status == "SERVED"
+
+    settled = MarkOrderSettled(order_repository=order_repository, publisher=publisher).execute(
+        order_id=OrderId(served.orderId),
+        trace_ctx=TraceContext(trace_id=None, request_id=None),
+    )
+    settled_again = MarkOrderSettled(
+        order_repository=order_repository,
+        publisher=publisher,
+    ).execute(
+        order_id=OrderId(settled.orderId),
+        trace_ctx=TraceContext(trace_id=None, request_id=None),
+    )
+    assert settled_again.status == "SETTLED"
+
     with pytest.raises(AcceptTransitionError):
         AcceptOrder(order_repository=order_repository, publisher=publisher).execute(
-            order_id=OrderId(ready.orderId),
+            order_id=OrderId(settled.orderId),
+            trace_ctx=TraceContext(trace_id=None, request_id=None),
+        )
+
+    with pytest.raises(ServedTransitionError):
+        MarkOrderServed(order_repository=order_repository, publisher=publisher).execute(
+            order_id=OrderId(accepted.orderId),
             trace_ctx=TraceContext(trace_id=None, request_id=None),
         )
