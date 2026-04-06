@@ -28,6 +28,107 @@ From `repo/`:
 - `make test-integration`
 - `make depcheck`
 
+## CI/CD and Staging
+
+GitHub Actions workflows live at repository root `.github/workflows/` because GitHub only loads workflows from the repository root. Those workflows target this monorepo under `repo/`.
+
+### Workflow Purpose
+
+- `CI`:
+  - runs on pull requests to `main`
+  - runs on pushes to branches, including `main`
+  - checks backend lint, typecheck, depcheck, unit tests, integration tests
+  - installs and builds frontend apps
+- `Release Staging`:
+  - runs automatically only after `CI` succeeds on `main`
+  - also supports manual `workflow_dispatch`
+  - builds and publishes the backend image to GHCR
+  - deploys only to the `staging` GitHub Environment over SSH
+  - runs post-deploy smoke checks
+
+### Current Deployment Scope
+
+- deployed image: backend only
+- image registry: GHCR
+- staging runtime: one Linux Docker host reachable by SSH
+- deployment method: pull published image + restart with `repo/deploy/staging/docker-compose.staging.yml`
+
+Frontend apps are built in CI but intentionally not deployed in staging yet because they are not containerized for staging runtime.
+
+### Required GitHub Environment
+
+Create a GitHub Environment named `staging`.
+
+Environment variables:
+
+- `STAGING_HOST`
+- `STAGING_USER`
+- `STAGING_PORT` (optional, default `22`)
+- `STAGING_APP_DIR`
+- `STAGING_BASE_URL` (optional)
+- `STAGING_RUN_SEED` (optional, default `true`)
+
+Environment secrets:
+
+- `STAGING_SSH_PRIVATE_KEY`
+- `STAGING_ENV_FILE`
+
+`STAGING_ENV_FILE` should contain the values described in `repo/deploy/staging/.env.staging.example`.
+
+### Staging Deploy Flow
+
+Automatic deploy:
+
+1. Push to `main`.
+2. `CI` completes successfully.
+3. `Release Staging` builds `ghcr.io/<owner>/foodbiz-backend:<short_sha>`, `:main`, and `:staging`.
+4. The workflow copies:
+   - `repo/deploy/staging/docker-compose.staging.yml`
+   - `repo/scripts/deploy_staging.sh`
+   - `repo/scripts/smoke_staging.sh`
+   - the secret-backed staging env file
+5. The host runs migrations, optional deterministic seed, backend restart, and smoke checks.
+
+Manual deploy:
+
+1. Open `Release Staging` in GitHub Actions.
+2. Click `Run workflow`.
+3. Leave `image_tag` empty to build and deploy current `main`.
+4. Set `image_tag` to a previously published short SHA to redeploy an older backend image.
+
+### Rollback Flow
+
+Rollback is intentionally simple and real:
+
+1. Open `Release Staging`.
+2. Run it manually.
+3. Supply a previously published short-SHA image tag in `image_tag`.
+4. The workflow redeploys that exact image to staging.
+
+The host also keeps the previous runtime env snapshot at `${STAGING_APP_DIR}/.env.previous`, which is useful for debugging, but the supported rollback path is the manual GitHub Actions redeploy.
+
+### Host Inspection
+
+On the staging host:
+
+```bash
+cd "$STAGING_APP_DIR"
+docker compose --env-file .env -f deploy/staging/docker-compose.staging.yml ps
+docker compose --env-file .env -f deploy/staging/docker-compose.staging.yml logs --tail=200 backend
+docker compose --env-file .env -f deploy/staging/docker-compose.staging.yml logs --tail=200 postgres
+docker compose --env-file .env -f deploy/staging/docker-compose.staging.yml logs --tail=200 redis
+```
+
+### Failed Run Inspection
+
+- GitHub Actions job logs show the exact failed step.
+- CI uploads failure artifacts for backend quality, backend unit tests, backend integration tests, and frontend builds.
+- Staging deploy and smoke logs are emitted directly in the workflow output.
+
+### More Detail
+
+See `repo/docs/staging.md` for host prerequisites, smoke scope, rollback, and troubleshooting detail.
+
 ## Service URLs
 
 - Backend API: `http://localhost:8000`

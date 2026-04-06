@@ -1,0 +1,266 @@
+name: Release Staging
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Existing backend image tag to redeploy. Leave blank to build and deploy current main.
+        required: false
+        type: string
+      run_seed:
+        description: Run the deterministic staging seed after migrations.
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      git_ref: ${{ steps.vars.outputs.git_ref }}
+      sha: ${{ steps.vars.outputs.sha }}
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+      deploy_tag: ${{ steps.vars.outputs.deploy_tag }}
+      should_build: ${{ steps.vars.outputs.should_build }}
+      backend_image: ${{ steps.vars.outputs.backend_image }}
+      run_seed: ${{ steps.vars.outputs.run_seed }}
+
+    steps:
+      - name: Normalize release inputs
+        id: vars
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref_name }}
+          CURRENT_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.event.workflow_run.head_branch || '' }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag || '' }}
+          INPUT_RUN_SEED: ${{ inputs.run_seed }}
+          DEFAULT_RUN_SEED: ${{ vars.STAGING_RUN_SEED || 'true' }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            git_ref="$WORKFLOW_REF"
+            sha="$WORKFLOW_SHA"
+            requested_tag=""
+            run_seed="$DEFAULT_RUN_SEED"
+          else
+            git_ref="$CURRENT_REF"
+            sha="$CURRENT_SHA"
+            requested_tag="$INPUT_IMAGE_TAG"
+            run_seed="${INPUT_RUN_SEED:-$DEFAULT_RUN_SEED}"
+          fi
+
+          if [[ "$git_ref" != "main" ]]; then
+            echo "Only main is allowed to deploy to staging. Ref was '$git_ref'." >&2
+            exit 1
+          fi
+
+          short_sha="${sha:0:7}"
+          should_build="true"
+          deploy_tag="$short_sha"
+
+          if [[ -n "$requested_tag" ]]; then
+            should_build="false"
+            deploy_tag="$requested_tag"
+          fi
+
+          owner_lc="${REPOSITORY_OWNER,,}"
+          backend_image="ghcr.io/${owner_lc}/foodbiz-backend"
+
+          {
+            echo "git_ref=$git_ref"
+            echo "sha=$sha"
+            echo "short_sha=$short_sha"
+            echo "deploy_tag=$deploy_tag"
+            echo "should_build=$should_build"
+            echo "backend_image=$backend_image"
+            echo "run_seed=$run_seed"
+          } >> "$GITHUB_OUTPUT"
+
+  build-backend:
+    name: Build and publish backend image
+    needs:
+      - prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: repo/backend
+          file: repo/backend/Dockerfile
+          push: true
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ needs.prepare.outputs.backend_image }}:${{ needs.prepare.outputs.short_sha }}
+            ${{ needs.prepare.outputs.backend_image }}:main
+            ${{ needs.prepare.outputs.backend_image }}:staging
+
+  deploy-staging:
+    name: Deploy to staging
+    needs:
+      - prepare
+      - build-backend
+    if: |
+      needs.prepare.result == 'success' &&
+      (
+        needs.prepare.outputs.should_build != 'true' ||
+        needs.build-backend.result == 'success'
+      )
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_BASE_URL }}
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Validate staging configuration
+        env:
+          STAGING_HOST: ${{ vars.STAGING_HOST || secrets.STAGING_HOST }}
+          STAGING_USER: ${{ vars.STAGING_USER || secrets.STAGING_USER }}
+          STAGING_PORT: ${{ vars.STAGING_PORT || secrets.STAGING_PORT || '22' }}
+          STAGING_APP_DIR: ${{ vars.STAGING_APP_DIR || secrets.STAGING_APP_DIR }}
+          STAGING_ENV_FILE: ${{ secrets.STAGING_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          : "${STAGING_HOST:?missing STAGING_HOST}"
+          : "${STAGING_USER:?missing STAGING_USER}"
+          : "${STAGING_PORT:?missing STAGING_PORT}"
+          : "${STAGING_APP_DIR:?missing STAGING_APP_DIR}"
+          : "${STAGING_ENV_FILE:?missing STAGING_ENV_FILE}"
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+
+      - name: Add staging host to known_hosts
+        env:
+          STAGING_HOST: ${{ vars.STAGING_HOST || secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ vars.STAGING_PORT || secrets.STAGING_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          ssh-keyscan -p "$STAGING_PORT" -H "$STAGING_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Prepare staging env file
+        env:
+          STAGING_ENV_FILE: ${{ secrets.STAGING_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/staging
+          printf '%s\n' "$STAGING_ENV_FILE" > artifacts/staging/.env.staging.base
+
+      - name: Upload staging assets to host
+        env:
+          STAGING_HOST: ${{ vars.STAGING_HOST || secrets.STAGING_HOST }}
+          STAGING_USER: ${{ vars.STAGING_USER || secrets.STAGING_USER }}
+          STAGING_PORT: ${{ vars.STAGING_PORT || secrets.STAGING_PORT || '22' }}
+          STAGING_APP_DIR: ${{ vars.STAGING_APP_DIR || secrets.STAGING_APP_DIR }}
+        run: |
+          set -euo pipefail
+          ssh -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "mkdir -p '$STAGING_APP_DIR/deploy/staging' '$STAGING_APP_DIR/scripts'"
+
+          scp -P "$STAGING_PORT" \
+            repo/deploy/staging/docker-compose.staging.yml \
+            "$STAGING_USER@$STAGING_HOST:$STAGING_APP_DIR/deploy/staging/docker-compose.staging.yml"
+
+          scp -P "$STAGING_PORT" \
+            repo/scripts/deploy_staging.sh \
+            repo/scripts/smoke_staging.sh \
+            "$STAGING_USER@$STAGING_HOST:$STAGING_APP_DIR/scripts/"
+
+          scp -P "$STAGING_PORT" \
+            artifacts/staging/.env.staging.base \
+            "$STAGING_USER@$STAGING_HOST:$STAGING_APP_DIR/.env.staging.base"
+
+          ssh -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "chmod 0750 '$STAGING_APP_DIR/scripts/deploy_staging.sh' '$STAGING_APP_DIR/scripts/smoke_staging.sh'"
+
+      - name: Deploy backend to staging
+        env:
+          STAGING_HOST: ${{ vars.STAGING_HOST || secrets.STAGING_HOST }}
+          STAGING_USER: ${{ vars.STAGING_USER || secrets.STAGING_USER }}
+          STAGING_PORT: ${{ vars.STAGING_PORT || secrets.STAGING_PORT || '22' }}
+          STAGING_APP_DIR: ${{ vars.STAGING_APP_DIR || secrets.STAGING_APP_DIR }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+          BACKEND_IMAGE: ${{ needs.prepare.outputs.backend_image }}
+          IMAGE_TAG: ${{ needs.prepare.outputs.deploy_tag }}
+          GIT_SHA: ${{ needs.prepare.outputs.sha }}
+          STAGING_RUN_SEED: ${{ needs.prepare.outputs.run_seed }}
+        run: |
+          set -euo pipefail
+          ssh -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "export STAGING_APP_DIR='$STAGING_APP_DIR' \
+              GHCR_USERNAME='$GHCR_USERNAME' \
+              GHCR_TOKEN='$GHCR_TOKEN' \
+              BACKEND_IMAGE='$BACKEND_IMAGE' \
+              IMAGE_TAG='$IMAGE_TAG' \
+              GIT_SHA='$GIT_SHA' \
+              STAGING_RUN_SEED='$STAGING_RUN_SEED'; \
+             '$STAGING_APP_DIR/scripts/deploy_staging.sh'"
+
+      - name: Run post-deploy smoke tests
+        env:
+          STAGING_HOST: ${{ vars.STAGING_HOST || secrets.STAGING_HOST }}
+          STAGING_USER: ${{ vars.STAGING_USER || secrets.STAGING_USER }}
+          STAGING_PORT: ${{ vars.STAGING_PORT || secrets.STAGING_PORT || '22' }}
+          STAGING_APP_DIR: ${{ vars.STAGING_APP_DIR || secrets.STAGING_APP_DIR }}
+        run: |
+          set -euo pipefail
+          ssh -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "export STAGING_APP_DIR='$STAGING_APP_DIR'; '$STAGING_APP_DIR/scripts/smoke_staging.sh'"
