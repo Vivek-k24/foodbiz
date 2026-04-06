@@ -134,7 +134,7 @@ See `repo/docs/staging.md` for host prerequisites, smoke scope, rollback, and tr
 - Backend API: `http://localhost:8000`
 - Jaeger: `http://localhost:16686`
 - Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000` (`admin/admin`)
+- Grafana: `http://localhost:3000` (`admin/Grafana@1234`)
 
 ## Run & Verify (ROP-006)
 

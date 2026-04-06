@@ -46,6 +46,14 @@ jobs:
           mkdir -p artifacts/backend-quality
           make -C repo lint | tee artifacts/backend-quality/lint.log
 
+      - name: Print Python tool versions
+        run: |
+          set -euo pipefail
+          python --version
+          python -m mypy --version
+          python -c "import sqlalchemy; print(sqlalchemy.__version__)"
+          python -m pip freeze | sort
+          
       - name: Run backend typecheck
         run: |
           set -euo pipefail
