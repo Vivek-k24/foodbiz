@@ -194,7 +194,6 @@ class SqlAlchemyOrderRepository(OrderRepository):
             limit + 1
         )
 
-
         with Session(self._engine) as session:
             models = list(session.execute(statement).unique().scalars().all())
 
