@@ -18,6 +18,13 @@ require_command() {
   fi
 }
 
+require_docker_compose() {
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "docker compose v2 plugin is required on the staging host" >&2
+    exit 1
+  fi
+}
+
 require_var STAGING_APP_DIR
 require_var GHCR_USERNAME
 require_var GHCR_TOKEN
@@ -26,6 +33,7 @@ require_var IMAGE_TAG
 require_var GIT_SHA
 
 require_command docker
+require_docker_compose
 
 APP_DIR="${STAGING_APP_DIR}"
 COMPOSE_FILE="${APP_DIR}/deploy/staging/docker-compose.staging.yml"

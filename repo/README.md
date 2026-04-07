@@ -11,11 +11,13 @@ Backend follows strict clean boundaries:
 - `infrastructure/`: adapters for Postgres, Redis, observability.
 - `api/`: FastAPI HTTP/WS routes that orchestrate use cases only.
 
-Domain dependency policy is enforced by `make depcheck`.
+Domain dependency policy is enforced by `make depcheck` or `python backend/tools/depcheck.py`.
 
 ## Core Local Commands
 
-From `repo/`:
+These commands are for a local developer machine inside `repo/`.
+
+If you are using macOS, Linux, or Git Bash with `make` available:
 
 - `make up`
 - `make down`
@@ -28,9 +30,29 @@ From `repo/`:
 - `make test-integration`
 - `make depcheck`
 
+If you are using Windows PowerShell and do not have `make`, run the direct equivalents instead:
+
+- `docker compose up -d --build`
+- `docker compose down -v`
+- `docker compose logs -f --tail=200`
+- `docker compose exec backend alembic upgrade head`
+- `docker compose exec backend python -m rop.tools.seed`
+- `ruff check backend`
+- `ruff format --check backend`
+- `mypy backend`
+- `pytest -q backend/tests/unit`
+- `pytest -q backend/tests/integration`
+- `python backend/tools/depcheck.py`
+
 ## CI/CD and Staging
 
 GitHub Actions workflows live at repository root `.github/workflows/` because GitHub only loads workflows from the repository root. Those workflows target this monorepo under `repo/`.
+
+Command scope:
+
+- GitHub Actions workflow commands run on GitHub-hosted Ubuntu runners.
+- `repo/scripts/*.sh` are Linux staging-host scripts and require Bash plus Docker Compose v2.
+- Local Windows development should use the direct commands above instead of trying to run the staging Bash scripts.
 
 ### Workflow Purpose
 
@@ -134,7 +156,7 @@ See `repo/docs/staging.md` for host prerequisites, smoke scope, rollback, and tr
 - Backend API: `http://localhost:8000`
 - Jaeger: `http://localhost:16686`
 - Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000` (`admin/Grafana@1234`)
+- Grafana: `http://localhost:3000` (`admin/admin`)
 
 ## Run & Verify (ROP-006)
 
@@ -145,16 +167,16 @@ See `repo/docs/staging.md` for host prerequisites, smoke scope, rollback, and tr
 
 ### Terminal A - Infrastructure + Backend
 
-Run in `repo/`:
+Run on your local developer machine in `repo/`:
 
 ```bash
 cd repo
-make up
-make migrate
-make seed
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m rop.tools.seed
 ```
 
-`make up` starts `postgres`, `redis`, `jaeger`, `prometheus`, `grafana`, and `backend` (`uvicorn --reload`).
+`docker compose up -d --build` starts `postgres`, `redis`, `jaeger`, `prometheus`, `grafana`, and `backend` (`uvicorn --reload`).
 
 Backend should be reachable at `http://localhost:8000`.
 
@@ -168,7 +190,7 @@ curl -s http://localhost:8000/metrics | head
 
 ### Terminal B - Kitchen Dashboard
 
-Open a new terminal and run in parallel:
+Open a new local terminal and run in parallel:
 
 ```bash
 cd repo/frontend
@@ -180,7 +202,7 @@ Dashboard runs on `http://localhost:5174`.
 
 ### Terminal C (Optional) - Web Ordering App
 
-Open another terminal and run in parallel if you want to place orders from UI:
+Open another local terminal and run in parallel if you want to place orders from UI:
 
 ```bash
 cd repo/frontend
@@ -274,7 +296,7 @@ curl -i http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/summary
 - If dashboard connects but no events arrive:
   - verify Redis is up: `docker compose ps`
   - verify WS endpoint: `ws://localhost:8000/ws?restaurant_id=rst_001&role=KITCHEN`
-  - inspect backend logs: `make logs`
+  - inspect backend logs: `docker compose logs -f --tail=200`
 - If `/health/ready` returns `503`:
   - confirm Postgres and Redis containers are running: `docker compose ps`
 - If frontend ports conflict:
@@ -286,9 +308,9 @@ curl -i http://localhost:8000/v1/restaurants/rst_001/tables/tbl_001/summary
 
 ```bash
 cd repo
-make up
-make migrate
-make seed
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m rop.tools.seed
 ```
 
 ### Terminal B - Dashboard

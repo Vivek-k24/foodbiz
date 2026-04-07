@@ -39,6 +39,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e "./repo/backend[dev]"
+          python -m pip check
 
       - name: Run backend lint
         run: |
@@ -52,7 +53,6 @@ jobs:
           python --version
           python -m mypy --version
           python -c "import sqlalchemy; print(sqlalchemy.__version__)"
-          python -m pip freeze | sort
           
       - name: Run backend typecheck
         run: |
@@ -95,6 +95,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e "./repo/backend[dev]"
+          python -m pip check
 
       - name: Run backend unit tests
         run: |
@@ -162,6 +163,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e "./repo/backend[dev]"
+          python -m pip check
 
       - name: Run migrations and deterministic seed
         run: |

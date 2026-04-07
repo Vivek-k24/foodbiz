@@ -79,6 +79,11 @@ jobs:
             exit 1
           fi
 
+          if [[ -n "$requested_tag" ]] && [[ ! "$requested_tag" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "image_tag contains unsupported characters: '$requested_tag'" >&2
+            exit 1
+          fi
+
           short_sha="${sha:0:7}"
           should_build="true"
           deploy_tag="$short_sha"

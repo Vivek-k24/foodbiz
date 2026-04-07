@@ -9,6 +9,13 @@ FoodBiz staging is intentionally simple:
 
 There is no Azure, Kubernetes, Terraform, or production workflow in this repository.
 
+## Command Scope
+
+- GitHub Actions workflow steps run on GitHub-hosted Ubuntu runners.
+- `repo/scripts/deploy_staging.sh` and `repo/scripts/smoke_staging.sh` are for the Linux staging host only.
+- Local Windows PowerShell development should not run the staging Bash scripts directly.
+- Local application verification still happens from `repo/` with Docker Compose, Python, and `pnpm`.
+
 ## Workflow Layout
 
 GitHub only reads workflow files from repository root `.github/workflows/`.
@@ -55,10 +62,11 @@ The staging host must already provide:
 - a non-root deploy user with Docker access
 - SSH access for the configured `STAGING_USER`
 
-Recommended first-time host bootstrap, run on the host as the staging user:
+Recommended first-time host bootstrap, run on the Linux staging host as the staging user:
 
 ```bash
-mkdir -p /srv/foodbiz-staging/deploy/staging /srv/foodbiz-staging/scripts
+export STAGING_APP_DIR=/srv/foodbiz-staging
+mkdir -p "$STAGING_APP_DIR/deploy/staging" "$STAGING_APP_DIR/scripts"
 docker --version
 docker compose version
 ```
@@ -75,7 +83,7 @@ Automatic staging deploy:
 6. `deploy_staging.sh` pulls the backend image, runs migrations, optionally runs deterministic seed data, and restarts the backend.
 7. `smoke_staging.sh` verifies health, metrics, and the seeded menu read path.
 
-Manual staging deploy / rollback:
+Manual staging deploy / rollback from GitHub Actions:
 
 1. Open `Release Staging` in GitHub Actions.
 2. Click `Run workflow`.
@@ -133,10 +141,10 @@ GitHub Actions:
 - inspect the failed step directly in Actions
 - CI uploads logs on failure for backend quality, unit, integration, and frontend build jobs
 
-Staging host:
+Linux staging host:
 
 ```bash
-cd /srv/foodbiz-staging
+cd "$STAGING_APP_DIR"
 docker compose --env-file .env -f deploy/staging/docker-compose.staging.yml ps
 docker compose --env-file .env -f deploy/staging/docker-compose.staging.yml logs --tail=200 backend
 docker compose --env-file .env -f deploy/staging/docker-compose.staging.yml logs --tail=200 postgres
