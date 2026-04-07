@@ -2175,3 +2175,1125 @@ POST /v1/restaurants/rst_001/tables/tbl_001/close
 GET /v1/restaurants/rst_001/tables/tbl_001/summary
 Confirm UI survives refresh and shows the hydrated orders.
 CODEX>>
+<<'CODEX'
+ROP-007 v1.0 [CODEX] Table registry + restaurant tables list (REST + cursor) + dashboard hydration + realtime updates
+
+Repository
+repo is a monorepo under ./repo
+backend is ./repo/backend (FastAPI, clean architecture boundaries)
+frontend is ./repo/frontend (apps/dashboard and apps/web-ordering)
+observability and infra are via docker-compose at ./repo/docker-compose.yml
+current capabilities include: open table, place order (idempotency), kitchen queue (REST + cursor), accept/ready transitions (idempotent + optimistic concurrency), WS fanout via Redis, metrics, error envelope, table order history, close-table, table summary, table.closed WS fanout
+
+Problem to solve
+We still don’t have a first-class “restaurant tables list” endpoint or UI view.
+Right now, you need to already know table IDs, and the dashboard focuses on kitchen queue + a single table’s orders.
+We need a server-friendly “Tables” view that survives refresh:
+- REST hydrate to list tables for a restaurant
+- Realtime updates via WS when tables open/close and when new orders arrive on a table
+
+Goal
+Implement restaurant-level table registry view end-to-end:
+1) Backend: list tables for a restaurant (REST) with status filter + limit + opaque cursor pagination
+2) Backend: publish table.opened event when a table is opened (table.closed already exists)
+3) Backend: include minimal “table activity rollup” in list results (lastOrderAt, totals, counts) using existing order data
+4) Frontend dashboard: add a “Tables” view that hydrates list via REST, then applies WS events to keep it live
+5) Tests: unit + integration coverage for list tables + pagination + events
+6) README: add ROP-007 runbook steps + sanity checklist
+
+Backend requirements
+
+A) Restaurant tables list endpoint
+Add endpoint:
+GET /v1/restaurants/{restaurant_id}/tables?status=ALL|OPEN|CLOSED&limit=50&cursor=<opaque>
+
+Behavior:
+- Returns tables for restaurant_id, sorted newest-first by opened_at desc then table_id desc (stable order)
+- status filter:
+  - ALL => all tables
+  - OPEN => only OPEN
+  - CLOSED => only CLOSED
+- limit 1..200
+- cursor is opaque + URL-safe, same “style” as kitchen queue and table orders (base64url or equivalent)
+- Response shape:
+{
+  "tables": [
+    {
+      "tableId": "tbl_001",
+      "restaurantId": "rst_001",
+      "status": "OPEN|CLOSED",
+      "openedAt": "...",
+      "closedAt": null|"...",
+      "lastOrderAt": null|"...",
+      "totals": {"amountCents": 0, "currency": "USD"},
+      "counts": {"ordersTotal": 0, "placed": 0, "accepted": 0, "ready": 0}
+    }
+  ],
+  "nextCursor": "string|null"
+}
+
+Implementation notes:
+- Add a new use case in:
+  repo/backend/src/rop/application/use_cases/list_tables.py  (or similar naming)
+- Add/extend a repository port for listing tables:
+  repo/backend/src/rop/application/ports/repositories.py
+  - TableRepository.list_for_restaurant(restaurant_id, status, limit, cursor)
+- Implement in SQLAlchemy repository:
+  repo/backend/src/rop/infrastructure/table_repo.py (create if missing) OR extend existing table repo file
+- For rollups (lastOrderAt/totals/counts):
+  - Prefer doing this efficiently in SQL (aggregate per table in the page of results)
+  - Keep it minimal: compute only for returned page of table_ids
+  - Reuse existing money/currency helpers and keep currency as USD for now (as existing code does)
+- Add API router:
+  repo/backend/src/rop/api/routes/table_registry.py  (preferred) OR extend existing tables router cleanly
+- Add error mappings:
+  - If restaurant_id is invalid / not found, return standard error envelope with code RESTAURANT_NOT_FOUND (if such code exists) or NOT_FOUND with consistent structure.
+  - Validation errors remain INVALID_REQUEST.
+
+B) Publish table.opened event
+Currently table.close emits table.closed. Add a table.opened event emission when open succeeds.
+
+Requirements:
+- Event type: table.opened
+- Must use the same stable event envelope mapper you already have (event_id, event_type, occurred_at, request_id, trace_id, restaurant_id, payload)
+- Payload should include at minimum: { "tableId": "...", "status": "OPEN", "openedAt": "..." }
+- Publish via Redis pubsub on the same restaurant channel convention used by other events (do not introduce new infra)
+
+Files likely involved:
+- repo/backend/src/rop/domain/events.py (add event type)
+- repo/backend/src/rop/application/use_cases/open_table.py (publish event on success)
+- repo/backend/src/rop/api/event_envelope.py (add mapping for table.opened if needed)
+
+C) Metrics (minimal)
+Add:
+- rop_tables_opened_total{restaurant_id="..."} counter incremented when a table is opened successfully
+- rop_tables_list_requests_total{restaurant_id="...",status="..."} counter incremented when list endpoint is called (optional but useful)
+
+Where:
+- repo/backend/src/rop/application/metrics/order_lifecycle.py (or existing metrics module)
+- Keep naming consistent with current rop_* metrics
+
+Frontend requirements (Dashboard)
+
+A) Tables view
+Update dashboard to include a “Tables” view (tab/button) alongside existing views.
+
+Behavior:
+- On load/refresh, hydrate tables list via REST:
+  GET http://localhost:8000/v1/restaurants/rst_001/tables?status=OPEN&limit=50
+- Render:
+  - tableId
+  - status
+  - openedAt/closedAt (format readable)
+  - lastOrderAt
+  - totals (money)
+  - counts (ordersTotal/ready etc)
+- Allow clicking a table row to switch to the existing “table-focused orders view” (reuse current table orders hydration endpoint already added in ROP-006)
+- Keep WS connection:
+  - When receiving table.opened or table.closed, update the tables list in-memory:
+    - if table.opened => insert/update the table as OPEN
+    - if table.closed => update row as CLOSED and update totals/counts if present in payload; otherwise re-fetch summary for that table on-demand
+  - When receiving order.* events, update that table’s lastOrderAt and counts if feasible; otherwise keep it minimal and only update lastOrderAt (don’t overcomplicate)
+
+Files:
+- repo/frontend/apps/dashboard/src/App.tsx (or equivalent entry component)
+- Any new small components may be added under:
+  repo/frontend/apps/dashboard/src/components/ (optional)
+
+Non-negotiables:
+- Keep it minimal; do not introduce a full UI framework migration
+- Continue to hydrate via REST first, then apply WS events
+
+Tests added/updated
+
+Backend unit tests:
+- Add unit tests for list tables use case:
+  repo/backend/tests/unit/test_list_tables_use_case.py
+  - status filter behavior
+  - cursor encode/decode and stable ordering
+  - rollup defaults when no orders exist
+
+Backend integration tests:
+- Add integration test that:
+  - seeds data
+  - opens a new table (tbl_002)
+  - places an order on it
+  - hits GET /v1/restaurants/rst_001/tables?status=OPEN and asserts tbl_002 appears with lastOrderAt set
+  - closes table and asserts GET with status=CLOSED shows it
+File:
+  repo/backend/tests/integration/test_table_registry_list.py
+
+WS integration test:
+- Extend existing WS test to verify table.opened event fans out:
+  repo/backend/tests/integration/test_ws_receives_events.py
+  - connect WS
+  - open table
+  - assert a table.opened event arrives
+
+README runbook (required)
+Update:
+repo/README.md
+
+Add a “Run & Verify (ROP-007)” section with:
+- Parallel terminals (infra/backend + dashboard)
+- Copy/paste verification checklist:
+  1) start stack, migrate, seed
+  2) open a new table tbl_002
+  3) list tables (OPEN)
+  4) place an order on tbl_002
+  5) list tables again and confirm lastOrderAt updates
+  6) close tbl_002 (after order READY) then list CLOSED
+  7) dashboard “Tables” tab shows tbl_002 live and survives refresh
+
+Commands to verify (must work)
+cd repo
+make up
+make migrate
+make seed
+
+# open a table
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_002/open
+
+# list OPEN tables
+curl -s "http://localhost:8000/v1/restaurants/rst_001/tables?status=OPEN&limit=50"
+
+# place order (with idempotency key)
+curl -i -X POST "http://localhost:8000/v1/restaurants/rst_001/tables/tbl_002/orders" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: rop007-smoke-001" \
+  -d '{"lines":[{"itemId":"itm_001","quantity":1}],"note":"rop-007 smoke"}'
+
+# accept/ready
+curl -i -X POST http://localhost:8000/v1/orders/<ORDER_ID>/accept
+curl -i -X POST http://localhost:8000/v1/orders/<ORDER_ID>/ready
+
+# close table
+curl -i -X POST http://localhost:8000/v1/restaurants/rst_001/tables/tbl_002/close
+
+# list CLOSED tables
+curl -s "http://localhost:8000/v1/restaurants/rst_001/tables?status=CLOSED&limit=50"
+
+# tests + quality
+pytest -q backend/tests/unit
+pytest -q backend/tests/integration
+make depcheck
+
+Frontend
+cd repo/frontend
+pnpm i
+pnpm --filter dashboard dev -- --port 5174
+
+Deliverable summary
+- Backend: restaurant tables list endpoint (status + limit + opaque cursor) with minimal rollups
+- Backend: table.opened event published via Redis and fanned out via WS
+- Backend: minimal metrics for table opened + list requests
+- Dashboard: Tables view hydrates via REST, updates via WS, survives refresh; can drill into table orders view
+- Tests: unit + integration + WS coverage updated
+- README: ROP-007 runbook + sanity checklist (copy/paste)
+CODEX>>
+<<'CODEX' 
+ROP-008 v1.0 [CODEX] Frontend-only wiring: Kitchen accept/ready buttons + Tables open/close + selectable table ordering (no Swagger needed)
+
+Context
+ROP-007 is merged into main.
+Backend already supports:
+- POST /v1/restaurants/{restaurant_id}/tables/{table_id}/open
+- POST /v1/restaurants/{restaurant_id}/tables/{table_id}/close
+- POST /v1/restaurants/{restaurant_id}/tables/{table_id}/orders (Idempotency-Key supported)
+- POST /v1/orders/{order_id}/accept
+- POST /v1/orders/{order_id}/ready
+- GET /v1/restaurants/{restaurant_id}/tables (registry)
+- GET /v1/restaurants/{restaurant_id}/tables/{table_id}/orders (table history)
+- GET /v1/restaurants/{restaurant_id}/tables/{table_id}/summary
+- GET /v1/restaurants/{restaurant_id}/kitchen/orders (kitchen queue)
+Dashboard already hydrates via REST + applies WS events. Web-ordering can place test order but table selection is limited.
+
+Goal
+Make MVP usable without Swagger:
+1) Dashboard Kitchen tab: Accept + Ready buttons per order
+2) Dashboard Tables tab: Open Table + Close Table buttons; selectable table drives table orders view
+3) Web-ordering: user can select tableId (default tbl_001) and place order for that table; store selected tableId in localStorage; hydrate My Table Orders for that table
+4) UI hardening: show API errors inline, prevent double-click spam, keep UI consistent with optimistic concurrency/idempotency rules
+5) README: Add “Run & Verify (ROP-008)” where all actions are done from UIs (no curl/Swagger required)
+
+Non-negotiables
+- No backend changes in this story unless absolutely required for UI correctness (default: frontend-only).
+- Keep dependencies minimal: do not add new frontend libraries.
+- Do not break existing hydration + WS flows; just extend UI actions.
+- Defensive rendering: never crash on missing money fields.
+- Respect existing API error envelope; parse error.code/message and show it.
+
+Acceptance criteria
+Dashboard (Kitchen)
+- Orders in PLACED show an “Accept” button.
+- Orders in ACCEPTED show a “Mark Ready” button.
+- Clicking a button calls the backend endpoint and updates UI immediately (optimistic) and stays consistent when WS event arrives.
+- Button disables while request in flight.
+- If API returns 409 INVALID_ORDER_TRANSITION or CONFLICT, show inline error and re-fetch that order (or refresh queue for that status).
+
+Dashboard (Tables)
+- Tables list shows OPEN/CLOSED/ALL filter (already exists); add “Open Table” button for a provided tableId.
+- Selecting a table still hydrates table orders + summary; add “Place Test Order” button for selected table using menu item itm_001.
+- Close Table button remains; show error if blocked (TABLE_CLOSE_BLOCKED).
+- After open/close/order events, list updates (WS), and refresh still rehydrates via REST.
+
+Web-ordering
+- Add a table selector input (default tbl_001) near the “Place Test Order” button.
+- Persist selected tableId to localStorage key: rop.selectedTableId
+- When placing order, include Idempotency-Key generated as:
+  rop8-<tableId>-<yyyyMMddHHmmss>-<random6>
+- “My Table Orders” panel hydrates using selected tableId and updates via WS.
+- No hard-coded table id in API calls.
+
+README
+- Add ROP-008 section that shows:
+  Terminal A: docker compose up -d --build, migrate, seed
+  Terminal B: pnpm dashboard dev
+  Terminal C: pnpm web-ordering dev
+  Verification checklist using only UI clicks:
+    - open tbl_002 from dashboard tables
+    - place order from web-ordering for tbl_002
+    - accept + ready from dashboard kitchen
+    - close table from dashboard tables
+
+Implementation details
+
+Frontend Dashboard changes
+File: repo/frontend/apps/dashboard/src/App.tsx
+1) Kitchen tab UI:
+- For each order row:
+  - If status == PLACED => show button “Accept”
+    - onClick => POST {API}/v1/orders/{orderId}/accept
+  - If status == ACCEPTED => show button “Mark Ready”
+    - onClick => POST {API}/v1/orders/{orderId}/ready
+- After success:
+  - Either update local state for that order status immediately OR trigger a refresh of current queue tab.
+- Handle errors:
+  - Parse response JSON error envelope:
+    - error.code, error.message
+  - Show per-order error text under the row.
+  - On 409/409-CONFLICT, refresh queue tab to reflect current server state.
+- Disable button during request.
+
+2) Tables tab UI:
+- Add an input “Table ID” (default tbl_001, editable).
+- Add button “Open Table” that calls:
+  POST /v1/restaurants/rst_001/tables/{tableId}/open
+- Keep existing list selection; when user selects a row, set selectedTableId.
+- Add button “Place Test Order” for selected table:
+  POST /v1/restaurants/rst_001/tables/{selectedTableId}/orders
+  Body: {"lines":[{"itemId":"itm_001","quantity":1}]}
+  Header: Idempotency-Key: generate stable random per click
+- Close table button should call close endpoint for selected table and show errors inline.
+
+3) WS event application:
+- When receiving order.accepted/order.ready:
+  - update kitchen queue lists accordingly (move between status buckets) OR re-fetch current tab.
+- When receiving table.opened/table.closed:
+  - update tables list row status and timestamps (already partially exists).
+- Never crash if payload missing totals; use safe fallbacks.
+
+Frontend Web-ordering changes
+File: repo/frontend/apps/web-ordering/src/pages/MenuPage.tsx
+1) Add table selector input + localStorage:
+- state: tableId, init from localStorage rop.selectedTableId or default tbl_001
+- onChange => update state + localStorage
+2) Update all API calls that use tbl_001 to use selected tableId:
+- place test order endpoint uses selected tableId
+- my table orders hydration uses selected tableId
+- summary endpoint uses selected tableId (if used)
+3) For WS:
+- when events arrive:
+  - if event payload tableId matches selected tableId, update My Table Orders
+  - otherwise ignore
+
+Helpers (optional, small)
+You may create:
+- repo/frontend/apps/dashboard/src/lib/api.ts
+- repo/frontend/apps/web-ordering/src/lib/api.ts
+But keep it minimal; no new deps.
+
+Testing
+Manual UI verification (required) using only browser:
+1) Start stack (compose + migrate + seed)
+2) Dashboard: Tables -> enter tbl_002 -> Open Table -> confirm it appears as OPEN
+3) Web-ordering: set tableId=tbl_002 -> Place Test Order -> confirm My Table Orders shows it
+4) Dashboard: Kitchen -> PLACED -> click Accept -> verify it moves to ACCEPTED
+5) Dashboard: Kitchen -> ACCEPTED -> click Mark Ready -> verify it moves to READY
+6) Dashboard: Tables -> select tbl_002 -> Close Table -> succeeds only when no non-ready orders exist
+7) Refresh dashboard and web-ordering:
+   - tables list and my table orders rehydrate correctly
+
+Quality checks
+Run:
+cd repo/frontend
+pnpm -r lint (if configured) OR at least pnpm --filter dashboard build and pnpm --filter web-ordering build
+Ensure no TypeScript errors.
+
+Deliverables
+- Dashboard has kitchen action buttons + table open/place-order actions
+- Web-ordering supports selectable tableId with persistence
+- README updated so entire flow is doable without Swagger/curl
+CODEX>>
+<<CODEX
+ROP-008 v1.1 [DEBUG][CODEX] Fix dashboard TS index error + web-ordering MenuPage missing/import mismatch
+
+Context
+ROP-008 was applied. Current issues:
+1) Dashboard TypeScript error: "Type 'unknown' cannot be used as an index type" when indexing tables map with payload.tableId in App.tsx.
+2) Web-ordering Vite runtime error: cannot load /src/pages/MenuPage.tsx (missing file or wrong import path).
+
+Goal
+Make both dev servers run cleanly:
+- `pnpm --filter dashboard dev` has no TS errors
+- `pnpm --filter web-ordering dev` loads successfully (no missing MenuPage file)
+- Builds still pass:
+  - `pnpm --filter dashboard build`
+  - `pnpm --filter web-ordering build`
+
+Non-negotiables
+- Do not introduce new dependencies.
+- Keep changes minimal and localized.
+- Preserve current behavior from ROP-008.
+
+Tasks
+
+A) Dashboard: fix TS error in App.tsx (unknown payload indexing)
+File: repo/frontend/apps/dashboard/src/App.tsx
+
+1) Locate the WS onmessage handler where you do something like:
+- `const payload = envelope.payload;`
+- `setTables((current) => { const row = current[payload.tableId]; ... return { ...current, [payload.tableId]: {...} } })`
+and TS complains about payload.tableId being unknown.
+
+2) Fix by introducing a narrow type guard / parser for event payloads:
+- Define a minimal Envelope type and specific payload types:
+  - TableOpenedPayload: { tableId: string; openedAt?: string }
+  - TableClosedPayload: { tableId: string; closedAt?: string }
+  - OrderEventPayload (optional): { tableId?: string; orderId?: string; ... }
+- Implement a helper:
+  - `function isRecord(v: unknown): v is Record<string, unknown>`
+  - `function getString(obj: Record<string, unknown>, key: string): string | null`
+  - `function getTableIdFromPayload(payload: unknown): string | null`
+- Use it to safely extract tableId:
+  - `const tableId = getTableIdFromPayload(envelope.payload);`
+  - If null, ignore event.
+- Then index with tableId (string) so TS is satisfied:
+  - `const row = current[tableId];`
+  - `[tableId]: {...}`
+
+3) Also ensure you safely handle missing fields when updating rows:
+- For closedAt/openedAt fields, only assign if typeof === "string".
+
+B) Web-ordering: fix MenuPage missing file/import mismatch
+Symptoms show Vite is trying to load:
+- `/src/pages/MenuPage.tsx`
+resolved at:
+- `repo/frontend/apps/web-ordering/src/pages/MenuPage.tsx`
+but file does not exist (or import points wrong).
+
+Do the following:
+1) Inspect repo/frontend/apps/web-ordering/src for actual page file name/location.
+2) Make the project consistent using ONE of these approaches (pick the simplest based on current structure):
+Option 1 (preferred): Ensure the file exists at the expected path
+- Create: repo/frontend/apps/web-ordering/src/pages/MenuPage.tsx
+- Move/rename any existing page component (if currently named differently) into this path.
+- Update exports accordingly.
+
+Option 2: Update imports to match existing file
+- If the page actually lives elsewhere (e.g., src/MenuPage.tsx or src/pages/menu/MenuPage.tsx), then update:
+  - repo/frontend/apps/web-ordering/src/main.tsx
+  - and any router/imports
+to point to the correct file.
+
+3) Ensure MenuPage contains the ROP-008 tableId selection + localStorage logic already implemented.
+If the content exists in some other file, move it rather than rewriting from scratch.
+
+C) Verification commands (must pass)
+From repo/frontend:
+- `pnpm i`
+- `pnpm --filter dashboard build`
+- `pnpm --filter web-ordering build`
+
+Dev smoke:
+- `pnpm --filter dashboard dev -- --port 5174`
+- `pnpm --filter web-ordering dev -- --port 5173`
+Confirm both pages load in browser without console errors.
+
+Deliverables
+- Dashboard App.tsx compiles with strict TS, no "unknown index type" errors.
+- Web-ordering runs; MenuPage path/imports are correct and stable.
+CODEX>>
+<<CODEX 
+ROP-009 v1.0 [CODEX] Kitchen Board UX: single-screen columns (PLACED/ACCEPTED/READY) with monochrome status styling + zero extra clicks
+
+Context
+Current dashboard kitchen UX uses tabs (PLACED/ACCEPTED/READY) which adds extra clicks and slows scanning.
+Stakeholder request: show all open orders side-by-side like a KDS board (reference image), with clear status identification and minimal reading.
+We will keep monochrome design (black/white/grey), no new dependencies, no backend changes unless absolutely necessary.
+
+Goal
+Replace the Kitchen tab UI with a 3-column board:
+- Columns: PLACED | ACCEPTED | READY visible at once
+- Order cards move between columns automatically on WS events and after action buttons
+- Each order card shows: orderId, tableId, createdAt, lines (name, qty, modifiers/notes if present), total (if available)
+- Actions on cards:
+  - PLACED: Accept
+  - ACCEPTED: Mark Ready
+  - READY: no action (or optional “Dismiss” later; not in this story)
+- Remove kitchen status tabs entirely (no extra clicks)
+- Maintain existing behavior: REST hydration + WS updates + error handling + request in-flight disable
+
+Non-negotiables
+- Colors limited to black/white/greys only.
+- No new frontend libs (no Tailwind, no UI kits).
+- No backend changes required for this story.
+- Do not regress existing Tables view, selected table drill-in, close-table, summary, or web-ordering.
+- Defensive rendering: handle missing totalMoney/priceMoney safely.
+
+Acceptance criteria
+- Kitchen tab shows 3 columns with headers and counts:
+  - PLACED (N), ACCEPTED (N), READY (N)
+- Page refresh:
+  - board hydrates from REST kitchen queue endpoint for each status (3 calls) OR a single ALL call if backend already supports it; prefer 3 calls (no backend change)
+- WS updates:
+  - order.placed adds card to PLACED column
+  - order.accepted moves card to ACCEPTED column
+  - order.ready moves card to READY column
+- Button actions:
+  - Accept button calls POST /v1/orders/{orderId}/accept
+  - Mark Ready calls POST /v1/orders/{orderId}/ready
+  - Buttons disable while request pending and show inline error if failed
+- Layout is clean and readable:
+  - board columns are responsive: 3 columns desktop, 1–2 columns narrow
+  - cards have consistent spacing and strong hierarchy
+- Builds pass:
+  - pnpm --filter dashboard build
+
+Implementation plan
+
+A) Dashboard Kitchen UI refactor (no logic regressions)
+File: repo/frontend/apps/dashboard/src/App.tsx
+
+1) Replace Kitchen tab content:
+- Remove/stop using the PLACED/ACCEPTED/READY tabs for kitchen view.
+- Introduce a board layout:
+  - a parent grid container with 3 column sections.
+
+2) Data model in state (min changes):
+- Maintain one canonical map of orders by orderId:
+  - ordersById: Record<string, OrderPayload>
+- Maintain derived lists per status:
+  - placedOrderIds, acceptedOrderIds, readyOrderIds
+or compute via selector function each render.
+
+3) Hydration:
+- On Kitchen view entry (or on app load):
+  - fetch 3 queues:
+    GET /v1/restaurants/rst_001/kitchen/orders?status=PLACED&limit=50
+    GET /v1/restaurants/rst_001/kitchen/orders?status=ACCEPTED&limit=50
+    GET /v1/restaurants/rst_001/kitchen/orders?status=READY&limit=50
+- Merge results into ordersById.
+- Keep the existing refresh button behavior if any; update it to reload all three columns.
+
+4) WS handling:
+- Keep existing socket.onmessage, but ensure it updates ordersById and therefore moves cards automatically:
+  - on order.accepted / order.ready: update that order’s status
+  - on order.placed: insert new order
+- Do not crash on payload variations; use guards as in earlier fixes.
+
+5) Actions:
+- Accept/Ready buttons:
+  - call existing API helper or fetch() directly
+  - on success: optimistic update status in ordersById
+  - on error: set per-order error message, and optionally re-fetch affected status queues
+
+B) Styling (monochrome board)
+Files:
+- repo/frontend/apps/dashboard/src/styles.css (already exists from ROP-008 v2.1)
+Update/add classes only (no new CSS system):
+- .boardGrid: display grid, gap, responsive columns
+- .column: card container
+- .columnHeader: title + count chip
+- .cardList: vertical spacing
+- .orderCard: monochrome bordered card with padding
+- .orderMeta: orderId/tableId/createdAt small text
+- .statusPillPlaced / Accepted / Ready: different grey backgrounds
+- .actionRow: right-aligned buttons
+- .linesList: compact list styling
+- .muted: reused
+
+Design rules:
+- PLACED column uses light grey accents
+- ACCEPTED uses mid grey accents
+- READY uses darker grey chip (still readable)
+
+C) Keep Tables view unchanged
+- Do not remove existing Tables tab, selected table drill-in, close-table and summary panel.
+
+D) Verification (manual)
+1) Start backend stack and seed (existing runbook)
+2) Open dashboard Kitchen tab:
+   - Confirm 3 columns visible with counts
+3) Place an order from web-ordering:
+   - Card appears in PLACED column without refresh
+4) Click Accept:
+   - Card moves to ACCEPTED column
+5) Click Mark Ready:
+   - Card moves to READY column
+6) Refresh browser:
+   - Board rehydrates and shows orders in correct columns
+
+Build verification
+cd repo/frontend
+pnpm i
+pnpm --filter dashboard build
+
+Deliverables
+- Kitchen board UI with 3 columns and actions on cards
+- No backend changes
+- No new dependencies
+- Monochrome, professional look consistent with current design
+CODEX>>
+<<CODEX 
+ROP-009 v1.0 [CODEX] Kitchen Board UX: single-screen columns (PLACED/ACCEPTED/READY) with monochrome status styling + zero extra clicks
+
+Context
+Current dashboard kitchen UX uses tabs (PLACED/ACCEPTED/READY) which adds extra clicks and slows scanning.
+Stakeholder request: show all open orders side-by-side like a KDS board (reference image), with clear status identification and minimal reading.
+We will keep monochrome design (black/white/grey), no new dependencies, no backend changes unless absolutely necessary.
+
+Goal
+Replace the Kitchen tab UI with a 3-column board:
+- Columns: PLACED | ACCEPTED | READY visible at once
+- Order cards move between columns automatically on WS events and after action buttons
+- Each order card shows: orderId, tableId, createdAt, lines (name, qty, modifiers/notes if present), total (if available)
+- Actions on cards:
+  - PLACED: Accept
+  - ACCEPTED: Mark Ready
+  - READY: no action (or optional “Dismiss” later; not in this story)
+- Remove kitchen status tabs entirely (no extra clicks)
+- Maintain existing behavior: REST hydration + WS updates + error handling + request in-flight disable
+
+Non-negotiables
+- Colors limited to black/white/greys only.
+- No new frontend libs (no Tailwind, no UI kits).
+- No backend changes required for this story.
+- Do not regress existing Tables view, selected table drill-in, close-table, summary, or web-ordering.
+- Defensive rendering: handle missing totalMoney/priceMoney safely.
+
+Acceptance criteria
+- Kitchen tab shows 3 columns with headers and counts:
+  - PLACED (N), ACCEPTED (N), READY (N)
+- Page refresh:
+  - board hydrates from REST kitchen queue endpoint for each status (3 calls) OR a single ALL call if backend already supports it; prefer 3 calls (no backend change)
+- WS updates:
+  - order.placed adds card to PLACED column
+  - order.accepted moves card to ACCEPTED column
+  - order.ready moves card to READY column
+- Button actions:
+  - Accept button calls POST /v1/orders/{orderId}/accept
+  - Mark Ready calls POST /v1/orders/{orderId}/ready
+  - Buttons disable while request pending and show inline error if failed
+- Layout is clean and readable:
+  - board columns are responsive: 3 columns desktop, 1–2 columns narrow
+  - cards have consistent spacing and strong hierarchy
+- Builds pass:
+  - pnpm --filter dashboard build
+
+Implementation plan
+
+A) Dashboard Kitchen UI refactor (no logic regressions)
+File: repo/frontend/apps/dashboard/src/App.tsx
+
+1) Replace Kitchen tab content:
+- Remove/stop using the PLACED/ACCEPTED/READY tabs for kitchen view.
+- Introduce a board layout:
+  - a parent grid container with 3 column sections.
+
+2) Data model in state (min changes):
+- Maintain one canonical map of orders by orderId:
+  - ordersById: Record<string, OrderPayload>
+- Maintain derived lists per status:
+  - placedOrderIds, acceptedOrderIds, readyOrderIds
+or compute via selector function each render.
+
+3) Hydration:
+- On Kitchen view entry (or on app load):
+  - fetch 3 queues:
+    GET /v1/restaurants/rst_001/kitchen/orders?status=PLACED&limit=50
+    GET /v1/restaurants/rst_001/kitchen/orders?status=ACCEPTED&limit=50
+    GET /v1/restaurants/rst_001/kitchen/orders?status=READY&limit=50
+- Merge results into ordersById.
+- Keep the existing refresh button behavior if any; update it to reload all three columns.
+
+4) WS handling:
+- Keep existing socket.onmessage, but ensure it updates ordersById and therefore moves cards automatically:
+  - on order.accepted / order.ready: update that order’s status
+  - on order.placed: insert new order
+- Do not crash on payload variations; use guards as in earlier fixes.
+
+5) Actions:
+- Accept/Ready buttons:
+  - call existing API helper or fetch() directly
+  - on success: optimistic update status in ordersById
+  - on error: set per-order error message, and optionally re-fetch affected status queues
+
+B) Styling (monochrome board)
+Files:
+- repo/frontend/apps/dashboard/src/styles.css (already exists from ROP-008 v2.1)
+Update/add classes only (no new CSS system):
+- .boardGrid: display grid, gap, responsive columns
+- .column: card container
+- .columnHeader: title + count chip
+- .cardList: vertical spacing
+- .orderCard: monochrome bordered card with padding
+- .orderMeta: orderId/tableId/createdAt small text
+- .statusPillPlaced / Accepted / Ready: different grey backgrounds
+- .actionRow: right-aligned buttons
+- .linesList: compact list styling
+- .muted: reused
+
+Design rules:
+- PLACED column uses light grey accents
+- ACCEPTED uses mid grey accents
+- READY uses darker grey chip (still readable)
+
+C) Keep Tables view unchanged
+- Do not remove existing Tables tab, selected table drill-in, close-table and summary panel.
+
+D) Verification (manual)
+1) Start backend stack and seed (existing runbook)
+2) Open dashboard Kitchen tab:
+   - Confirm 3 columns visible with counts
+3) Place an order from web-ordering:
+   - Card appears in PLACED column without refresh
+4) Click Accept:
+   - Card moves to ACCEPTED column
+5) Click Mark Ready:
+   - Card moves to READY column
+6) Refresh browser:
+   - Board rehydrates and shows orders in correct columns
+
+Build verification
+cd repo/frontend
+pnpm i
+pnpm --filter dashboard build
+
+Deliverables
+- Kitchen board UI with 3 columns and actions on cards
+- No backend changes
+- No new dependencies
+- Monochrome, professional look consistent with current design
+CODEX>>
+<<CODEX 
+ROP-010 v1.0 [CODEX] Realistic seeded Italian menu (10 food + 15 drinks w/ item-specific modifiers) + cart w/ modifiers end-to-end (DB + API + WS + UI)
+
+Context
+We are done with ROP-009 kitchen board.
+Current seed/menu is too small for real testing. We need a realistic menu with per-item modifiers and a drinks section.
+We also want the ordering UI to support multi-item cart and per-line modifiers/notes and have kitchen display them.
+
+Goal
+1) Replace seed menu with:
+   - 10 Italian food items
+   - 15 drinks items
+   - Each item has its own modifier set (exclusive to that recipe)
+2) Web-ordering Menu page renders:
+   - Food section and Drinks section
+   - Add-to-cart for any available item
+   - Per-line modifiers UI based on that item’s allowed modifiers
+3) Backend persists order line modifiers/notes and includes them in:
+   - Order responses
+   - Table orders
+   - Kitchen queue
+   - WS events (order.placed, order.accepted, order.ready)
+4) Kitchen board shows modifiers/notes under each line item
+5) Tests updated/added for menu seed + modifiers persistence + WS payload
+
+Non-negotiables
+- Domain purity maintained.
+- No new heavy deps.
+- Monochrome UI.
+- Backward compatible: if modifiers omitted, still works.
+- Modifiers are item-specific: UI must not show irrelevant modifiers for other items.
+
+Data model decisions (make these exact)
+- Menu items have an optional list of allowed modifiers:
+  - allowed_modifiers: [{ code: str, label: str, kind: "toggle"|"choice"|"text", options?: [str] }]
+- Order lines store selected modifiers:
+  - modifiers: [{ code: str, label: str, value: str }]  (value is "true"/choice/text)
+- Notes remain freeform string.
+
+Backend changes
+
+A) DB: Menu item allowed modifiers
+Files:
+- repo/backend/src/rop/infrastructure/db/models/menu.py
+Add column to menu_items:
+- allowed_modifiers_json JSONB NULL
+
+Migration:
+- repo/backend/src/rop/infrastructure/db/migrations/versions/<timestamp>_menu_item_allowed_modifiers_json.py
+
+Repository mapping:
+- repo/backend/src/rop/infrastructure/db/repositories/menu_repo.py
+Return allowed modifiers in menu DTO (see DTO section).
+
+B) DB: Order line selected modifiers
+Files:
+- repo/backend/src/rop/infrastructure/db/models/order.py
+Add column to order_lines:
+- modifiers_json JSONB NULL
+
+Migration:
+- repo/backend/src/rop/infrastructure/db/migrations/versions/<timestamp>_order_line_modifiers_json.py
+
+Repository mapping:
+- repo/backend/src/rop/infrastructure/db/repositories/order_repo.py
+Map domain <-> JSON.
+
+C) Domain
+Files:
+- repo/backend/src/rop/domain/order/value_objects.py (create if not present)
+Define OrderLineModifier:
+- code: str
+- label: str
+- value: str
+Invariant: code/label non-empty.
+
+Update:
+- repo/backend/src/rop/domain/order/entities.py
+OrderLine includes:
+- notes: str|None
+- modifiers: list[OrderLineModifier]
+
+D) DTOs
+Requests:
+- repo/backend/src/rop/application/dto/requests.py
+Update PlaceOrderLineRequest to accept:
+- notes?: string|null
+- modifiers?: [{ code: string, label: string, value: string }] | null
+
+Responses:
+- repo/backend/src/rop/application/dto/responses.py
+MenuItemResponse includes:
+- allowedModifiers?: [{ code, label, kind, options? }] | null
+OrderLineResponse includes:
+- notes?: string|null
+- modifiers?: [{ code, label, value }] | null
+
+E) Use cases + event payload
+- repo/backend/src/rop/application/use_cases/place_order.py
+Validate:
+- If modifiers provided, each modifier code must be allowed by the menu item’s allowedModifiers list.
+- If a modifier code is not allowed for that item => 400 INVALID_MODIFIER
+- For kind:
+  - toggle: value must be "true" or "false"
+  - choice: value must be one of options
+  - text: any string, max length 80
+Include modifiers + notes in OrderLine.
+
+- repo/backend/src/rop/application/mappers/order_mapper.py
+Include modifiers/notes.
+
+- repo/backend/src/rop/application/mappers/event_envelope.py
+Include modifiers/notes in order.* payload lines.
+
+F) Seed a realistic menu
+File:
+- repo/backend/src/rop/tools/seed.py
+Replace/expand seeded menu items to exactly:
+
+Food (10)
+1) Margherita Pizza (itm_001) $14.50
+   modifiers: extra_mozzarella(toggle), no_basil(toggle), crust(choice: ["regular","thin","gluten_free"])
+2) Pizza Diavola (itm_002) $16.50
+   modifiers: spice_level(choice:["mild","medium","hot"]), extra_spicy_salami(toggle), no_chili_flakes(toggle)
+3) Spaghetti Carbonara (itm_003) $17.90
+   modifiers: add_guanciale(toggle), no_egg(toggle), pasta(choice:["spaghetti","rigatoni"])
+4) Fettuccine Alfredo (itm_004) $16.90
+   modifiers: add_chicken(toggle), extra_parmesan(toggle), sauce(choice:["light","normal","extra"])
+5) Lasagna Classica (itm_005) $18.90
+   modifiers: extra_bolognese(toggle), no_bechamel(toggle), add_chili_oil(toggle)
+6) Chicken Parmigiana (itm_006) $19.50
+   modifiers: extra_marinara(toggle), extra_mozzarella(toggle), side(choice:["spaghetti","salad"])
+7) Risotto ai Funghi (itm_007) $18.50
+   modifiers: extra_mushrooms(toggle), add_truffle_oil(toggle), no_garlic(toggle)
+8) Bruschetta al Pomodoro (itm_008) $9.50
+   modifiers: no_garlic(toggle), extra_basil(toggle), add_burrata(toggle)
+9) Caesar Salad (itm_009) $9.90
+   modifiers: add_chicken(toggle), no_croutons(toggle), dressing(choice:["light","normal","extra"])
+10) Tiramisu (itm_010) $8.50 (isAvailable=false)
+   modifiers: extra_cocoa(toggle), no_coffee(toggle), add_espresso_shot(toggle)
+
+Drinks (15) (drink_001..drink_015)
+1) Espresso $3.50  modifiers: size(choice:["single","double"]), add_sugar(toggle)
+2) Cappuccino $4.50 modifiers: milk(choice:["whole","oat","almond"]), extra_foam(toggle)
+3) Latte $4.90 modifiers: milk(choice:["whole","oat","almond"]), extra_shot(toggle), syrup(choice:["vanilla","caramel","none"])
+4) Iced Tea $3.90 modifiers: sweetener(choice:["unsweet","sweet","half"]), lemon(toggle)
+5) Lemonade $4.20 modifiers: sparkling(toggle), less_sugar(toggle)
+6) Sparkling Water $3.50 modifiers: lime(toggle)
+7) Still Water $2.50 modifiers: none (omit allowedModifiers)
+8) Coke $3.00 modifiers: ice(choice:["no_ice","regular_ice","extra_ice"])
+9) Diet Coke $3.00 modifiers: ice(choice:["no_ice","regular_ice","extra_ice"])
+10) Sprite $3.00 modifiers: ice(choice:["no_ice","regular_ice","extra_ice"])
+11) Orange Juice $4.50 modifiers: pulp(choice:["no_pulp","some_pulp","lots_pulp"])
+12) Apple Juice $4.50 modifiers: none
+13) House Red (glass) $9.00 modifiers: none (placeholder; still non-alcoholic policy not required here)
+14) House White (glass) $9.00 modifiers: none
+15) Italian Soda $5.50 modifiers: flavor(choice:["blood_orange","lemon","berry"]), sparkling(toggle)
+
+Note: We are not enforcing alcohol policy restrictions here because this is seed data for a restaurant platform; it is allowed.
+
+Ensure seed is idempotent:
+- Upsert restaurant rst_001
+- Upsert menu men_001 version increments only if you choose; for now keep version=1 but replace items to these exact IDs.
+- If items already exist, update their fields and allowed_modifiers_json.
+
+Frontend changes
+
+A) Web-ordering: render Food + Drinks and dynamic modifiers
+File:
+- repo/frontend/apps/web-ordering/src/pages/MenuPage.tsx
+
+Requirements:
+1) Split menu items into two sections:
+- FOOD: itm_001..itm_010
+- DRINKS: drink_001..drink_015
+Implement by simple prefix check: itemId startsWith("drink_") => Drinks else Food.
+
+2) Menu cards show:
+- name, price, availability chip
+- Add to cart button disabled if !isAvailable
+
+3) Cart:
+- Each cart line shows:
+  - name, qty stepper, remove
+  - modifier controls based on item.allowedModifiers:
+    - toggle => checkbox
+    - choice => select dropdown
+    - text => input (max 80)
+  - notes input (optional)
+- Store selected modifiers in cart line state as [{code,label,value}]
+
+4) Submit:
+- POST place order with lines from cart:
+  - itemId, quantity, notes, modifiers[]
+- Idempotency-Key per submit
+- Clears cart on success, refreshes My Table Orders panel
+
+B) Kitchen board: show modifiers/notes
+File:
+- repo/frontend/apps/dashboard/src/App.tsx
+Under each line item in order cards:
+- Show notes if present
+- Show modifiers as small grey chips: label:value (or label only if value == "true")
+
+C) Defensive rendering
+- If allowedModifiers missing, hide modifier UI.
+- If modifiers missing in order payload, hide display section.
+
+Tests
+
+Backend unit tests
+- Validate modifier enforcement:
+  - allowed modifier passes
+  - disallowed code returns INVALID_MODIFIER
+  - choice outside options returns INVALID_MODIFIER_VALUE
+- PlaceOrder totals still correct.
+
+Backend integration tests
+- Seed creates 25 items (10 food + 15 drinks)
+- Place order with:
+  - 2 food items with modifiers
+  - 1 drink with modifiers
+- Verify GET order returns modifiers
+- Verify kitchen queue includes modifiers
+- Verify WS order.placed includes modifiers
+
+Frontend verification
+- pnpm --filter web-ordering build
+- pnpm --filter dashboard build
+Manual:
+- Add 3 items (food+drink) with different modifier types and place order
+- See modifiers on Kitchen board and My Table Orders
+
+Commands to verify (required)
+cd repo
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m rop.tools.seed
+
+cd repo/frontend
+pnpm i
+pnpm --filter web-ordering dev -- --port 5173
+pnpm --filter dashboard dev -- --port 5174
+Open web-ordering, add items, place order, confirm Kitchen updates.
+
+Deliverables
+- Seeded realistic menu with item-specific modifiers (10 food + 15 drinks)
+- Web-ordering supports multi-item cart + dynamic modifiers
+- Backend persists and validates modifiers
+- Kitchen shows modifiers clearly
+- Tests updated and passing
+CODEX>>
+<<CODEX 
+ROP-011 v1.0 [CODEX] Add 2 post-ready statuses (SERVED, SETTLED) end-to-end + color-code kitchen board by status
+
+Context
+Current order lifecycle: PLACED -> ACCEPTED -> READY.
+We want 2 additional statuses to reflect front-of-house completion:
+- SERVED: food delivered to table
+- SETTLED: tab settled (payment completed / closed out)
+Keep it simple: implement statuses + transitions + UI actions, and color-code kitchen board by status.
+No deep payment integration in this story.
+
+Goal
+Backend:
+1) Add OrderStatus values: SERVED, SETTLED
+2) Add transitions:
+   - READY -> SERVED
+   - SERVED -> SETTLED
+3) Add endpoints:
+   - POST /v1/orders/{order_id}/served
+   - POST /v1/orders/{order_id}/settled
+4) Ensure idempotency rules:
+   - calling served twice is safe (200, remains SERVED)
+   - calling settled twice is safe (200, remains SETTLED)
+   - invalid transitions return 409 INVALID_ORDER_TRANSITION
+5) Persist status changes with optimistic concurrency (reuse version mechanism)
+6) Publish WS events:
+   - order.served
+   - order.settled
+7) Update kitchen queue endpoint to support status=ALL returning all statuses already supported OR keep status filtering working for SERVED/SETTLED.
+
+Frontend:
+8) Dashboard kitchen board:
+   - Add actions:
+     - READY cards show “Mark Served”
+     - SERVED cards show “Mark Settled”
+   - Orders remain visible on board until SETTLED (then remove from board by default)
+9) Color code order cards by status using monochrome intensity (still black/white/grey):
+   - PLACED: light grey accent
+   - ACCEPTED: medium grey accent
+   - READY: darker grey accent
+   - SERVED: darkest grey accent
+   - SETTLED: hidden from board OR shown in a “Settled (today)” collapsible section (optional, default hidden)
+
+Non-negotiables
+- Keep dependencies unchanged.
+- Keep existing error envelope behavior.
+- No payment provider integration; SETTLED is a workflow marker only.
+- Domain remains pure.
+- UI stays monochrome (no bright colors).
+
+Acceptance criteria
+- Endpoints exist in Swagger and work:
+  - served from READY works
+  - settled from SERVED works
+  - served from PLACED/ACCEPTED blocked (409)
+  - settled from READY blocked (409)
+- WS events deliver and dashboard updates without refresh.
+- Kitchen board visually distinguishes statuses by card/chip styling.
+- Unit + integration tests cover:
+  - valid transitions
+  - invalid transitions
+  - idempotent repeated calls
+  - ws event payload includes new statuses
+- Builds pass:
+  - pytest unit/integration
+  - pnpm dashboard build
+
+Backend implementation details
+
+A) Domain
+File: repo/backend/src/rop/domain/order/entities.py
+- Extend OrderStatus enum/consts with SERVED, SETTLED
+- Add transition methods or update existing transition logic accordingly
+
+B) Application use cases
+Create:
+- repo/backend/src/rop/application/use_cases/mark_order_served.py
+- repo/backend/src/rop/application/use_cases/mark_order_settled.py
+Use same pattern as accept_order.py and mark_order_ready.py:
+- load order
+- validate transition
+- versioned update via repository
+- publish event envelope
+- update lifecycle metrics (optional minimal counters)
+
+C) API routes
+File: repo/backend/src/rop/api/routes/kitchen.py (or orders workflow route file)
+- Add:
+  - POST /v1/orders/{order_id}/served
+  - POST /v1/orders/{order_id}/settled
+Return OrderResponse
+
+D) Repository
+File: repo/backend/src/rop/infrastructure/db/repositories/order_repo.py
+- Reuse existing update_status_with_version logic
+- Ensure SERVED/SETTLED are allowed stored values
+- No DB schema changes required if status stored as string already; only update constraints if any exist
+
+E) Events
+File: repo/backend/src/rop/application/mappers/event_envelope.py
+- Add order.served and order.settled event types
+- Ensure payload includes orderId, tableId, status, timestamps, lines/modifiers
+
+F) Tests
+Unit:
+- repo/backend/tests/unit/order/test_order_domain.py (add new transition invariants)
+- add:
+  - repo/backend/tests/unit/order/test_mark_order_served_use_case.py
+  - repo/backend/tests/unit/order/test_mark_order_settled_use_case.py
+
+Integration:
+- extend existing order flow integration test to include served+settled
+- extend ws events integration test to validate receiving order.served and order.settled
+
+Frontend implementation details (Dashboard)
+
+A) Board behavior updates
+File: repo/frontend/apps/dashboard/src/App.tsx
+- In board hydration:
+  - include SERVED (and optionally SETTLED if you show it)
+  - easiest: fetch statuses PLACED, ACCEPTED, READY, SERVED in parallel
+- In WS handler:
+  - handle event_type order.served and order.settled
+  - on settled: remove from visible board map (or move to settled bucket if you implement optional section)
+
+B) Actions
+- READY cards: add button “Mark Served” -> POST /v1/orders/{orderId}/served
+- SERVED cards: add button “Mark Settled” -> POST /v1/orders/{orderId}/settled
+- Disable during request; show inline error
+
+C) Color coding (monochrome)
+File: repo/frontend/apps/dashboard/src/styles.css
+- Add status-specific classes for card borders/background:
+  - .orderCardPlaced, .orderCardAccepted, .orderCardReady, .orderCardServed
+- Use grey border-left thickness or background tint; keep readable
+- Chip styling similarly extended
+
+Verification steps (manual)
+1) Place order (web-ordering)
+2) Kitchen board: Accept -> Ready -> Served -> Settled
+3) Confirm card moves through columns/states and disappears when settled
+4) Refresh dashboard: board rehydrates correctly (settled not shown)
+
+Commands to verify
+Backend:
+pytest -q repo/backend/tests/unit
+pytest -q repo/backend/tests/integration
+
+Frontend:
+cd repo/frontend
+pnpm --filter dashboard build
+
+Deliverables
+- New statuses SERVED and SETTLED end-to-end
+- New endpoints /served and /settled
+- WS events for served/settled
+- Kitchen board color-coded by status with new action buttons
+- Tests updated and passing
+CODEX>>

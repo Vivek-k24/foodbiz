@@ -32,3 +32,9 @@ tmp/pytest-of-*/
 # general temp
 tmp/
 *.tmp
+
+# staging deploy artifacts
+deploy/staging/.env
+deploy/staging/.env.local
+deploy/staging/.env.staging
+deploy/staging/.env.staging.base

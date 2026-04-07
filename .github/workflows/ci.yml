@@ -1,0 +1,243 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - "**"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  backend-quality:
+    name: Backend quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e "./repo/backend[dev]"
+          python -m pip check
+
+      - name: Run backend lint
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/backend-quality
+          make -C repo lint | tee artifacts/backend-quality/lint.log
+
+      - name: Print Python tool versions
+        run: |
+          set -euo pipefail
+          python --version
+          python -m mypy --version
+          python -c "import sqlalchemy; print(sqlalchemy.__version__)"
+          
+      - name: Run backend typecheck
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/backend-quality
+          make -C repo typecheck | tee artifacts/backend-quality/typecheck.log
+
+      - name: Run dependency boundary checks
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/backend-quality
+          make -C repo depcheck | tee artifacts/backend-quality/depcheck.log
+
+      - name: Upload backend quality logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-quality-logs
+          path: artifacts/backend-quality
+          retention-days: 7
+
+  backend-unit:
+    name: Backend unit tests
+    runs-on: ubuntu-latest
+    needs:
+      - backend-quality
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e "./repo/backend[dev]"
+          python -m pip check
+
+      - name: Run backend unit tests
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/backend-unit
+          make -C repo test | tee artifacts/backend-unit/pytest-unit.log
+
+      - name: Upload backend unit test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-unit-logs
+          path: artifacts/backend-unit
+          retention-days: 7
+
+  backend-integration:
+    name: Backend integration tests
+    runs-on: ubuntu-latest
+    needs:
+      - backend-quality
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rop"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/rop
+      REDIS_URL: redis://127.0.0.1:6379/0
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
+      OTEL_SERVICE_NAME: rop-backend-ci
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e "./repo/backend[dev]"
+          python -m pip check
+
+      - name: Run migrations and deterministic seed
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/backend-integration
+          (
+            cd repo/backend
+            alembic upgrade head
+            python -m rop.tools.seed
+          ) | tee artifacts/backend-integration/bootstrap.log
+
+      - name: Run backend integration tests
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/backend-integration
+          make -C repo test-integration | tee artifacts/backend-integration/pytest-integration.log
+
+      - name: Upload backend integration logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-integration-logs
+          path: artifacts/backend-integration
+          retention-days: 7
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: repo/frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: |
+          set -euo pipefail
+          cd repo/frontend
+          pnpm install --frozen-lockfile
+
+      - name: Document current frontend CI scope
+        run: |
+          set -euo pipefail
+          echo "Frontend packages currently expose build scripts only; lint/test scripts are not configured yet."
+
+      - name: Build dashboard
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/frontend
+          cd repo/frontend
+          pnpm --filter dashboard build | tee ../../artifacts/frontend/dashboard-build.log
+
+      - name: Build web-ordering
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/frontend
+          cd repo/frontend
+          pnpm --filter web-ordering build | tee ../../artifacts/frontend/web-ordering-build.log
+
+      - name: Upload frontend build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-logs
+          path: artifacts/frontend
+          retention-days: 7

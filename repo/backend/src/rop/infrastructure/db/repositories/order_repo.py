@@ -148,10 +148,11 @@ class SqlAlchemyOrderRepository(OrderRepository):
                 status=new_status.value,
                 version=OrderModel.version + 1,
             )
+            .returning(OrderModel.id)
         )
         with Session(self._engine) as session:
-            result = session.execute(statement)
-            if result.rowcount != 1:
+            updated_id = session.execute(statement).scalar_one_or_none()
+            if updated_id is None:
                 session.rollback()
                 raise OptimisticConcurrencyError(f"order {order_id} version conflict")
             session.commit()
