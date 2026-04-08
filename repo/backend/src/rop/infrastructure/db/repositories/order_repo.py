@@ -84,10 +84,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
             OrderModel.table_id == str(table_id),
         ]
         statement = (
-            select(OrderModel)
-            .options(joinedload(OrderModel.lines))
-            .where(*conditions)
-            .limit(1)
+            select(OrderModel).options(joinedload(OrderModel.lines)).where(*conditions).limit(1)
         )
         with Session(self._engine) as session:
             model = session.execute(statement).unique().scalar_one_or_none()
@@ -109,10 +106,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
             OrderModel.idempotency_key == key,
         ]
         statement = (
-            select(OrderModel)
-            .options(joinedload(OrderModel.lines))
-            .where(*conditions)
-            .limit(1)
+            select(OrderModel).options(joinedload(OrderModel.lines)).where(*conditions).limit(1)
         )
 
         with Session(self._engine) as session:

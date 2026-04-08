@@ -64,7 +64,9 @@ class SqlAlchemyLocationRepository(LocationRepository):
                         last_session_opened_at=(
                             active_session.opened_at.replace(tzinfo=timezone.utc)
                             if active_session and active_session.opened_at.tzinfo is None
-                            else active_session.opened_at if active_session else None
+                            else active_session.opened_at
+                            if active_session
+                            else None
                         ),
                     )
                 )
