@@ -30,10 +30,8 @@ function App() {
     summaryStats,
     connectionStatus,
     registryLoading,
-    activityLoading,
     detailLoading,
     registryError,
-    activityError,
     detailError,
     detailMessage,
     locationActionPending,
@@ -58,8 +56,6 @@ function App() {
     }
   }
 
-  const refreshing = registryLoading || activityLoading;
-
   return (
     <main className="staffConsoleRoot">
       <TopBar
@@ -74,14 +70,15 @@ function App() {
         summaryStats={summaryStats}
         connectionStatus={connectionStatus}
         onRefresh={() => void refreshAll()}
-        refreshing={refreshing}
+        refreshing={registryLoading}
       />
 
-      {(registryError || activityError) && !refreshing ? (
+      {(registryError || detailError) ? (
         <div className="globalBanner cardSurface">
           <strong>Live data is degraded.</strong>
           <span>
-            {registryError ?? activityError} The console still renders the browser layout model so operators can keep context while reconnecting.
+            {registryError ?? detailError} The console keeps the floor model visible so operators can
+            maintain context while connectivity recovers.
           </span>
         </div>
       ) : null}
@@ -105,63 +102,24 @@ function App() {
         </div>
       ) : null}
 
-      {viewportMode === "large" ? (
-        <div className="consoleShell consoleShellLarge">
-          <QueuePane
-            mode={mode}
-            sections={queueSections}
-            selectedLocationId={selectedLocationId}
-            onSelectLocation={handleSelectLocation}
-            loading={activityLoading}
-            error={activityError}
-          />
-          <FloorPane
-            groupedLocations={groupedLocations}
-            selectedLocationId={selectedLocationId}
-            onSelectLocation={handleSelectLocation}
-            loading={registryLoading}
-            error={registryError}
-          />
-          <DetailPane
-            mode={mode}
-            location={selectedLocation}
-            summary={selectedSummary}
-            orders={selectedOrders}
-            loading={detailLoading}
-            error={detailError}
-            message={detailMessage}
-            locationActionPending={locationActionPending}
-            orderActionPending={orderActionPending}
-            orderActionError={orderActionError}
-            onOpenLocation={() => void handleOpenLocation()}
-            onCloseLocation={() => void handleCloseLocation()}
-            onOrderAction={(order, action) => void handleOrderAction(order, action)}
-          />
-        </div>
-      ) : (
-        <div
-          className={`consoleShell ${
-            viewportMode === "medium" ? "consoleShellMedium" : "consoleShellNarrow"
-          }`}
-        >
-          <FloorPane
-            groupedLocations={groupedLocations}
-            selectedLocationId={selectedLocationId}
-            onSelectLocation={handleSelectLocation}
-            loading={registryLoading}
-            error={registryError}
-          />
-
-          {secondaryPane === "QUEUE" ? (
+      <section className="consoleViewport">
+        {viewportMode === "large" ? (
+          <div className="consoleShell consoleShellLarge">
             <QueuePane
               mode={mode}
               sections={queueSections}
               selectedLocationId={selectedLocationId}
               onSelectLocation={handleSelectLocation}
-              loading={activityLoading}
-              error={activityError}
+              loading={registryLoading}
+              error={registryError}
             />
-          ) : (
+            <FloorPane
+              groupedLocations={groupedLocations}
+              selectedLocationId={selectedLocationId}
+              onSelectLocation={handleSelectLocation}
+              loading={registryLoading}
+              error={registryError}
+            />
             <DetailPane
               mode={mode}
               location={selectedLocation}
@@ -177,9 +135,50 @@ function App() {
               onCloseLocation={() => void handleCloseLocation()}
               onOrderAction={(order, action) => void handleOrderAction(order, action)}
             />
-          )}
-        </div>
-      )}
+          </div>
+        ) : (
+          <div
+            className={`consoleShell ${
+              viewportMode === "medium" ? "consoleShellMedium" : "consoleShellNarrow"
+            }`}
+          >
+            <FloorPane
+              groupedLocations={groupedLocations}
+              selectedLocationId={selectedLocationId}
+              onSelectLocation={handleSelectLocation}
+              loading={registryLoading}
+              error={registryError}
+            />
+
+            {secondaryPane === "QUEUE" ? (
+              <QueuePane
+                mode={mode}
+                sections={queueSections}
+                selectedLocationId={selectedLocationId}
+                onSelectLocation={handleSelectLocation}
+                loading={registryLoading}
+                error={registryError}
+              />
+            ) : (
+              <DetailPane
+                mode={mode}
+                location={selectedLocation}
+                summary={selectedSummary}
+                orders={selectedOrders}
+                loading={detailLoading}
+                error={detailError}
+                message={detailMessage}
+                locationActionPending={locationActionPending}
+                orderActionPending={orderActionPending}
+                orderActionError={orderActionError}
+                onOpenLocation={() => void handleOpenLocation()}
+                onCloseLocation={() => void handleCloseLocation()}
+                onOrderAction={(order, action) => void handleOrderAction(order, action)}
+              />
+            )}
+          </div>
+        )}
+      </section>
     </main>
   );
 }

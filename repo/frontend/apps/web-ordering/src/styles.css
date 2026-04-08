@@ -37,19 +37,24 @@ button {
 }
 
 .container {
-  max-width: 1120px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 32px 20px 48px;
 }
 
 .header,
 .cardHeader,
-.sectionHeader,
 .rowHeader,
 .controlGrid,
 .pageGrid,
 .statsGrid,
-.listStack {
+.listStack,
+.sectionStack,
+.sidebarStack,
+.supportGrid,
+.contextSwitch,
+.categoryHeader,
+.badgeRow {
   display: grid;
   gap: 16px;
 }
@@ -80,7 +85,7 @@ button {
 }
 
 .title {
-  font-size: clamp(2rem, 3vw, 2.6rem);
+  font-size: clamp(2rem, 3vw, 2.8rem);
   line-height: 1.05;
 }
 
@@ -110,7 +115,12 @@ button {
 .statCard,
 .errorBox,
 .infoBox,
-.emptyState {
+.emptyState,
+.contextButton,
+.contextCard,
+.supportPanel,
+.cartLine,
+.modifierChip {
   border-radius: 16px;
 }
 
@@ -130,7 +140,8 @@ button {
 }
 
 .badgeStrong,
-.btnPrimary {
+.btnPrimary,
+.contextButtonActive {
   background: #111111;
   color: #ffffff;
   border-color: #111111;
@@ -143,7 +154,10 @@ button {
 .card,
 .menuCard,
 .row,
-.statCard {
+.statCard,
+.contextCard,
+.cartLine,
+.supportPanel {
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow);
@@ -160,18 +174,13 @@ button {
 }
 
 .pageGrid {
-  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr);
   margin-top: 16px;
 }
 
-.controlGrid,
-.statsGrid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .sectionStack,
-.sidebarStack {
-  display: grid;
+.sidebarStack,
+.listStack {
   gap: 16px;
 }
 
@@ -181,32 +190,38 @@ button {
 }
 
 .input,
-.btn {
+.btn,
+.contextButton {
   border: 1px solid var(--border-strong);
   padding: 11px 12px;
   background: #ffffff;
   color: var(--text);
 }
 
-.btn {
+.btn,
+.contextButton {
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
 
-.btn:hover {
+.btn:hover,
+.contextButton:hover {
   background: #efefef;
 }
 
-.btnPrimary:hover {
+.btnPrimary:hover,
+.contextButtonActive:hover {
   background: #222222;
   color: #ffffff;
 }
 
-.btn:active {
+.btn:active,
+.contextButton:active {
   transform: translateY(1px);
 }
 
-.btn:disabled {
+.btn:disabled,
+.contextButton:disabled {
   cursor: not-allowed;
   background: #ebebeb;
   color: #9a9a9a;
@@ -215,9 +230,38 @@ button {
 }
 
 .btn:focus,
-.input:focus {
+.input:focus,
+.contextButton:focus {
   outline: 2px solid #111111;
   outline-offset: 2px;
+}
+
+.contextSwitch {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.contextCard,
+.cartLine {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.supportPanel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.supportPanel summary {
+  cursor: pointer;
+  padding: 14px 16px;
+  font-weight: 700;
+}
+
+.supportGrid {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0 16px 16px;
+  align-items: end;
 }
 
 .menuGrid,
@@ -235,16 +279,8 @@ button {
   padding: 16px;
 }
 
-.cartLine {
-  border: 1px solid var(--border);
-  background: var(--surface-muted);
-  border-radius: 16px;
-  padding: 16px;
-  display: grid;
-  gap: 14px;
-}
-
-.rowHeader {
+.rowHeader,
+.categoryHeader {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
 }
@@ -270,7 +306,8 @@ button {
 .summaryBar,
 .cartQuantityRow,
 .quantityControls,
-.modifierChips {
+.modifierChips,
+.badgeRow {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
@@ -331,18 +368,22 @@ button {
   align-items: center;
   border: 1px solid var(--border);
   background: #f1f1f1;
-  border-radius: 999px;
   padding: 4px 8px;
   color: var(--text-muted);
   font-size: 0.82rem;
 }
 
-.sectionHeader {
+.sectionHeader,
+.categoryHeader {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.compactStack {
+  gap: 18px;
 }
 
 .lineNotes {
@@ -406,14 +447,15 @@ button {
   font-family: Consolas, "SFMono-Regular", monospace;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 980px) {
   .header,
   .cardHeader,
   .pageGrid,
-  .controlGrid,
   .statsGrid,
   .rowHeader,
-  .modifierGroup {
+  .modifierGroup,
+  .supportGrid,
+  .contextSwitch {
     grid-template-columns: 1fr;
   }
 

@@ -1,13 +1,12 @@
-import { locationCatalog, locationZones } from "./locationCatalog";
-import { maxTimestamp } from "./formatting";
+import { locationLabel, locationZoneSortValue, tableIdFromLocationId } from "./locationCatalog";
 import type {
   LocationCounts,
+  LocationRecord,
   QueueSection,
   StaffLocation,
   StaffMode,
   SummaryStats,
   TableRegistryItem,
-  OrderPayload,
 } from "./types";
 
 function emptyCounts(): LocationCounts {
@@ -31,10 +30,10 @@ function deriveUiStatus(location: {
   if (location.manualOnly) {
     return "MANUAL";
   }
-  if (location.counts.ready > 0) {
+  if (location.counts.ready > 0 || location.counts.served > 0) {
     return "ATTENTION";
   }
-  if (location.counts.placed > 0 || location.counts.accepted > 0 || location.counts.served > 0) {
+  if (location.counts.placed > 0 || location.counts.accepted > 0) {
     return "ORDERING";
   }
   if (location.sessionOpen) {
@@ -46,142 +45,61 @@ function deriveUiStatus(location: {
   return "AVAILABLE";
 }
 
-function buildFallbackLocation(tableId: string): StaffLocation {
-  return {
-    locationId: tableId,
-    label: tableId.toUpperCase(),
-    type: "TABLE",
-    zone: "Unmapped",
-    seatCount: 4,
-    sortOrder: 10_000,
-    manualOnly: false,
-    kioskLinked: false,
-    supportsBackendSession: true,
-    backendStatus: null,
-    sessionOpen: false,
-    uiStatus: "AVAILABLE",
-    openedAt: null,
-    closedAt: null,
-    lastOrderAt: null,
-    totals: { amountCents: 0, currency: "USD" },
-    counts: emptyCounts(),
-    activeOrderIds: [],
-    assignmentState: "NOT_APPLICABLE",
-  };
-}
-
 export function buildStaffLocations(
-  tableRows: Record<string, TableRegistryItem>,
-  ordersById: Record<string, OrderPayload>
+  locationRows: LocationRecord[],
+  tableRows: Record<string, TableRegistryItem>
 ): StaffLocation[] {
-  const catalogById = new Map(locationCatalog.map((location) => [location.locationId, location]));
-  const byLocation = new Map<string, OrderPayload[]>();
+  return [...locationRows]
+    .map((location, index) => {
+      const backendTableId = location.type === "TABLE" ? tableIdFromLocationId(location.locationId) : null;
+      const tableRow = backendTableId ? tableRows[backendTableId] : undefined;
+      const counts: LocationCounts = tableRow?.counts ?? emptyCounts();
+      const manualOnly = location.type === "BAR_SEAT";
+      const sessionOpen = location.sessionStatus === "OPEN" || tableRow?.status === "OPEN";
+      const lastOrderAt = tableRow?.lastOrderAt ?? null;
+      const backendStatus = tableRow?.status === "OPEN" || tableRow?.status === "CLOSED" ? tableRow.status : location.sessionStatus;
 
-  for (const order of Object.values(ordersById)) {
-    if (!order.tableId) {
-      continue;
-    }
-    const existing = byLocation.get(order.tableId) ?? [];
-    existing.push(order);
-    byLocation.set(order.tableId, existing);
-  }
-
-  const merged: StaffLocation[] = locationCatalog.map((catalogEntry) => {
-    const row = tableRows[catalogEntry.locationId];
-    const orders = byLocation.get(catalogEntry.locationId) ?? [];
-    const counts: LocationCounts = {
-      ordersTotal: row?.counts.ordersTotal ?? 0,
-      placed: row?.counts.placed ?? 0,
-      accepted: row?.counts.accepted ?? 0,
-      ready: row?.counts.ready ?? 0,
-      served: orders.filter((order) => order.status === "SERVED").length,
-      settled: orders.filter((order) => order.status === "SETTLED").length,
-    };
-    const sessionOpen = row?.status === "OPEN";
-    const lastOrderAt = orders.reduce<string | null>(
-      (current, order) => maxTimestamp(current, order.createdAt),
-      row?.lastOrderAt ?? null
-    );
-    const activeOrderIds = orders
-      .filter((order) => order.status !== "SETTLED")
-      .map((order) => order.orderId);
-
-    const location: StaffLocation = {
-      ...catalogEntry,
-      backendStatus: row?.status === "OPEN" || row?.status === "CLOSED" ? row.status : null,
-      sessionOpen,
-      openedAt: row?.openedAt ?? null,
-      closedAt: row?.closedAt ?? null,
-      lastOrderAt,
-      totals: row?.totals ?? { amountCents: 0, currency: "USD" },
-      counts,
-      activeOrderIds,
-      assignmentState: catalogEntry.manualOnly
-        ? "MANUAL_ONLY"
-        : sessionOpen
-          ? "UNASSIGNED"
-          : "NOT_APPLICABLE",
-      uiStatus: deriveUiStatus({
-        manualOnly: catalogEntry.manualOnly,
+      return {
+        locationId: location.locationId,
+        restaurantId: location.restaurantId,
+        label: locationLabel(location),
+        type: location.type,
+        zone: location.zone ?? "Unmapped",
+        seatCount: location.capacity ?? 0,
+        sortOrder: locationZoneSortValue(location.zone ?? "Unmapped") * 100 + index,
+        manualOnly,
+        scanEnabled: location.type === "TABLE",
+        supportsBackendSession: location.type === "TABLE",
+        backendTableId,
+        activeSessionId: location.activeSessionId,
+        backendStatus,
         sessionOpen,
-        backendStatus: row?.status === "OPEN" || row?.status === "CLOSED" ? row.status : null,
+        openedAt: location.lastSessionOpenedAt ?? tableRow?.openedAt ?? null,
+        closedAt: tableRow?.closedAt ?? null,
         lastOrderAt,
+        totals: tableRow?.totals ?? { amountCents: 0, currency: "USD" },
         counts,
-      }),
-    };
-
-    return location;
-  });
-
-  for (const row of Object.values(tableRows)) {
-    if (catalogById.has(row.tableId)) {
-      continue;
-    }
-    const fallback = buildFallbackLocation(row.tableId);
-    merged.push({
-      ...fallback,
-      backendStatus: row.status === "OPEN" || row.status === "CLOSED" ? row.status : null,
-      sessionOpen: row.status === "OPEN",
-      openedAt: row.openedAt,
-      closedAt: row.closedAt,
-      lastOrderAt: row.lastOrderAt,
-      totals: row.totals,
-      counts: {
-        ordersTotal: row.counts.ordersTotal,
-        placed: row.counts.placed,
-        accepted: row.counts.accepted,
-        ready: row.counts.ready,
-        served: 0,
-        settled: 0,
-      },
-      uiStatus: deriveUiStatus({
-        manualOnly: false,
-        sessionOpen: row.status === "OPEN",
-        backendStatus: row.status === "OPEN" || row.status === "CLOSED" ? row.status : null,
-        lastOrderAt: row.lastOrderAt,
-        counts: {
-          ordersTotal: row.counts.ordersTotal,
-          placed: row.counts.placed,
-          accepted: row.counts.accepted,
-          ready: row.counts.ready,
-          served: 0,
-          settled: 0,
-        },
-      }),
-      assignmentState: row.status === "OPEN" ? "UNASSIGNED" : "NOT_APPLICABLE",
+        activeOrderIds: [],
+        assignmentState: manualOnly
+          ? "MANUAL_ONLY"
+          : sessionOpen && location.type === "TABLE"
+            ? "UNASSIGNED"
+            : "NOT_APPLICABLE",
+        uiStatus: deriveUiStatus({
+          manualOnly,
+          sessionOpen,
+          backendStatus,
+          lastOrderAt,
+          counts,
+        }),
+      } satisfies StaffLocation;
+    })
+    .sort((left, right) => {
+      if (left.sortOrder !== right.sortOrder) {
+        return left.sortOrder - right.sortOrder;
+      }
+      return left.label.localeCompare(right.label);
     });
-  }
-
-  return merged.sort((left, right) => {
-    const zoneDelta = locationZones.indexOf(left.zone as (typeof locationZones)[number]) - locationZones.indexOf(right.zone as (typeof locationZones)[number]);
-    if (zoneDelta !== 0) {
-      return zoneDelta;
-    }
-    if (left.sortOrder !== right.sortOrder) {
-      return left.sortOrder - right.sortOrder;
-    }
-    return left.locationId.localeCompare(right.locationId);
-  });
 }
 
 export function filterLocations(
@@ -209,32 +127,35 @@ export function filterLocations(
 }
 
 export function buildQueueSections(mode: StaffMode, locations: StaffLocation[]): QueueSection[] {
-  const nonManual = locations.filter((location) => !location.manualOnly);
+  const tables = locations.filter((location) => location.type === "TABLE");
   const manual = locations.filter((location) => location.manualOnly);
+  const offPremise = locations.filter(
+    (location) => location.type === "ONLINE_PICKUP" || location.type === "ONLINE_DELIVERY"
+  );
 
   if (mode === "ENTRANCE") {
     return [
       {
         id: "available-now",
         title: "Available now",
-        emptyText: "No locations are immediately available.",
-        items: nonManual.filter((location) => location.uiStatus === "AVAILABLE"),
+        emptyText: "No dining tables are immediately available.",
+        items: tables.filter((location) => location.uiStatus === "AVAILABLE"),
       },
       {
         id: "open-sessions",
         title: "Open sessions",
-        emptyText: "No live sessions are open right now.",
-        items: nonManual.filter((location) => location.sessionOpen),
+        emptyText: "No live table sessions are open right now.",
+        items: tables.filter((location) => location.sessionOpen),
       },
       {
         id: "turnover-watch",
         title: "Turnover watch",
-        emptyText: "No recently closed locations need turnover attention.",
-        items: nonManual.filter((location) => location.uiStatus === "TURNOVER"),
+        emptyText: "No recently closed tables need turnover attention.",
+        items: tables.filter((location) => location.uiStatus === "TURNOVER"),
       },
       {
         id: "bar-overview",
-        title: "Bar counter",
+        title: "Bar awareness",
         emptyText: "Bar seats are not configured in the venue catalog.",
         items: manual,
       },
@@ -243,26 +164,34 @@ export function buildQueueSections(mode: StaffMode, locations: StaffLocation[]):
 
   return [
     {
-      id: "needs-attention",
-      title: "Needs attention",
-      emptyText: "No sessions currently need ready/serve attention.",
-      items: nonManual.filter(
-        (location) => location.uiStatus === "ATTENTION" || location.counts.served > 0
+      id: "needs-follow-through",
+      title: "Needs follow-through",
+      emptyText: "No active tables currently need service follow-through.",
+      items: tables.filter(
+        (location) => location.counts.ready > 0 || location.counts.served > 0
       ),
     },
     {
       id: "ordering-active",
       title: "Ordering active",
-      emptyText: "No sessions are currently moving through ordering.",
-      items: nonManual.filter((location) => location.uiStatus === "ORDERING"),
+      emptyText: "No table sessions are currently moving through kitchen prep.",
+      items: tables.filter(
+        (location) => location.counts.placed > 0 || location.counts.accepted > 0
+      ),
     },
     {
       id: "open-unassigned",
       title: "Open and unassigned",
-      emptyText: "No open sessions are waiting for service ownership.",
-      items: nonManual.filter(
+      emptyText: "No open table sessions are waiting for service follow-through.",
+      items: tables.filter(
         (location) => location.sessionOpen && location.assignmentState === "UNASSIGNED"
       ),
+    },
+    {
+      id: "off-premise",
+      title: "Off-premise lanes",
+      emptyText: "No pickup or delivery locations are configured.",
+      items: offPremise,
     },
   ];
 }
@@ -301,10 +230,14 @@ export function groupLocationsByZone(locations: StaffLocation[]): Array<{
   zone: string;
   items: StaffLocation[];
 }> {
-  return locationZones
-    .map((zone) => ({
-      zone,
-      items: locations.filter((location) => location.zone === zone),
-    }))
-    .filter((group) => group.items.length > 0);
+  const groups = new Map<string, StaffLocation[]>();
+  for (const location of locations) {
+    const bucket = groups.get(location.zone) ?? [];
+    bucket.push(location);
+    groups.set(location.zone, bucket);
+  }
+
+  return [...groups.entries()]
+    .map(([zone, items]) => ({ zone, items }))
+    .sort((left, right) => locationZoneSortValue(left.zone) - locationZoneSortValue(right.zone));
 }

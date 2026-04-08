@@ -23,14 +23,16 @@ export function buildOrderFromEvent(payload: unknown): OrderPayload | null {
     return null;
   }
   const orderId = getString(payload, "orderId");
-  const tableId = getString(payload, "tableId") ?? "";
   if (!orderId) {
     return null;
   }
   return normalizeOrder({
     orderId,
     restaurantId: getString(payload, "restaurantId") ?? undefined,
-    tableId,
+    locationId: getString(payload, "locationId") ?? undefined,
+    tableId: getString(payload, "tableId") ?? undefined,
+    sessionId: getString(payload, "sessionId") ?? undefined,
+    source: getString(payload, "source") ?? undefined,
     status: getString(payload, "status") ?? "",
     totalMoney: isRecord(payload.totalMoney)
       ? {
@@ -42,7 +44,14 @@ export function buildOrderFromEvent(payload: unknown): OrderPayload | null {
             typeof payload.totalMoney.currency === "string" ? payload.totalMoney.currency : null,
         }
       : null,
+    total: isRecord(payload.total)
+      ? {
+          amountCents: typeof payload.total.amountCents === "number" ? payload.total.amountCents : null,
+          currency: typeof payload.total.currency === "string" ? payload.total.currency : null,
+        }
+      : null,
     createdAt: getString(payload, "createdAt") ?? "",
+    updatedAt: getString(payload, "updatedAt") ?? undefined,
     lines: Array.isArray(payload.lines) ? (payload.lines as OrderPayload["lines"]) : [],
   });
 }

@@ -4,13 +4,13 @@ import {
   advanceOrder,
   buildStaffConsoleWsUrl,
   closeLocation,
-  fetchKitchenOrders,
   fetchLocationOrders,
+  fetchLocations,
   fetchLocationSummary,
   fetchTableRegistry,
   openLocation,
 } from "../lib/api";
-import { parseEnvelope, buildOrderFromEvent, getTableEventPayload } from "../lib/events";
+import { buildOrderFromEvent, getTableEventPayload, parseEnvelope } from "../lib/events";
 import { maxTimestamp, normalizeOrder } from "../lib/formatting";
 import {
   buildQueueSections,
@@ -19,8 +19,8 @@ import {
   filterLocations,
   groupLocationsByZone,
 } from "../lib/locationViewModel";
-import { supportsBackendLocation } from "../lib/locationCatalog";
 import type {
+  LocationRecord,
   OrderAction,
   OrderPayload,
   StaffLocation,
@@ -38,15 +38,16 @@ function updateRowsForOrder(
   previousOrder: OrderPayload | undefined,
   nextOrder: OrderPayload
 ): Record<string, TableRegistryItem> {
+  if (!nextOrder.tableId) {
+    return rows;
+  }
+
   const row = rows[nextOrder.tableId];
   if (!row) {
     return rows;
   }
 
-  const nextCounts = {
-    ...row.counts,
-  };
-
+  const nextCounts = { ...row.counts };
   const removeStatus = previousOrder?.status;
   const addStatus = nextOrder.status;
 
@@ -54,25 +55,44 @@ function updateRowsForOrder(
     nextCounts.ordersTotal += 1;
   }
 
-  if (removeStatus === "PLACED") {
-    nextCounts.placed = Math.max(0, nextCounts.placed - 1);
-  }
-  if (removeStatus === "ACCEPTED") {
-    nextCounts.accepted = Math.max(0, nextCounts.accepted - 1);
-  }
-  if (removeStatus === "READY") {
-    nextCounts.ready = Math.max(0, nextCounts.ready - 1);
-  }
+  const decrement = (status: string | undefined): void => {
+    if (status === "PLACED") {
+      nextCounts.placed = Math.max(0, nextCounts.placed - 1);
+    }
+    if (status === "ACCEPTED") {
+      nextCounts.accepted = Math.max(0, nextCounts.accepted - 1);
+    }
+    if (status === "READY") {
+      nextCounts.ready = Math.max(0, nextCounts.ready - 1);
+    }
+    if (status === "SERVED") {
+      nextCounts.served = Math.max(0, nextCounts.served - 1);
+    }
+    if (status === "SETTLED") {
+      nextCounts.settled = Math.max(0, nextCounts.settled - 1);
+    }
+  };
 
-  if (addStatus === "PLACED") {
-    nextCounts.placed += 1;
-  }
-  if (addStatus === "ACCEPTED") {
-    nextCounts.accepted += 1;
-  }
-  if (addStatus === "READY") {
-    nextCounts.ready += 1;
-  }
+  const increment = (status: string): void => {
+    if (status === "PLACED") {
+      nextCounts.placed += 1;
+    }
+    if (status === "ACCEPTED") {
+      nextCounts.accepted += 1;
+    }
+    if (status === "READY") {
+      nextCounts.ready += 1;
+    }
+    if (status === "SERVED") {
+      nextCounts.served += 1;
+    }
+    if (status === "SETTLED") {
+      nextCounts.settled += 1;
+    }
+  };
+
+  decrement(removeStatus);
+  increment(addStatus);
 
   return {
     ...rows,
@@ -85,28 +105,41 @@ function updateRowsForOrder(
   };
 }
 
+function mapTableRows(items: TableRegistryItem[]): Record<string, TableRegistryItem> {
+  const next: Record<string, TableRegistryItem> = {};
+  for (const row of items) {
+    next[row.tableId] = row;
+  }
+  return next;
+}
+
 export function useStaffConsoleData() {
   const [mode, setMode] = useState<StaffMode>("ENTRANCE");
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<StaffLocation["type"] | "ALL">("ALL");
   const [statusFilter, setStatusFilter] = useState<StaffLocation["uiStatus"] | "ALL">("ALL");
-  const [selectedLocationId, setSelectedLocationId] = useState("tbl_001");
+  const [selectedLocationId, setSelectedLocationId] = useState("loc_tbl_001");
+  const [locationRows, setLocationRows] = useState<LocationRecord[]>([]);
   const [tableRows, setTableRows] = useState<Record<string, TableRegistryItem>>({});
   const [ordersById, setOrdersById] = useState<Record<string, OrderPayload>>({});
   const [selectedSummary, setSelectedSummary] = useState<TableSummaryResponse | null>(null);
   const [connectionStatus, setConnectionStatus] = useState("Connecting");
   const [registryLoading, setRegistryLoading] = useState(false);
-  const [activityLoading, setActivityLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [registryError, setRegistryError] = useState<string | null>(null);
-  const [activityError, setActivityError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailMessage, setDetailMessage] = useState<string | null>(null);
   const [locationActionPending, setLocationActionPending] = useState<"open" | "close" | null>(null);
   const [orderActionPending, setOrderActionPending] = useState<Record<string, boolean>>({});
   const [orderActionError, setOrderActionError] = useState<Record<string, string>>({});
+
+  const locationRowsRef = useRef(locationRows);
   const tableRowsRef = useRef(tableRows);
   const ordersByIdRef = useRef(ordersById);
+
+  useEffect(() => {
+    locationRowsRef.current = locationRows;
+  }, [locationRows]);
 
   useEffect(() => {
     tableRowsRef.current = tableRows;
@@ -117,8 +150,8 @@ export function useStaffConsoleData() {
   }, [ordersById]);
 
   const locations = useMemo(
-    () => buildStaffLocations(tableRows, ordersById),
-    [ordersById, tableRows]
+    () => buildStaffLocations(locationRows, tableRows),
+    [locationRows, tableRows]
   );
   const filteredLocations = useMemo(
     () => filterLocations(locations, search, typeFilter, statusFilter),
@@ -137,13 +170,19 @@ export function useStaffConsoleData() {
     () => locations.find((location) => location.locationId === selectedLocationId) ?? null,
     [locations, selectedLocationId]
   );
-  const selectedOrders = useMemo(
-    () =>
-      Object.values(ordersById)
-        .filter((order) => order.tableId === selectedLocationId)
-        .sort(sortOrdersByNewest),
-    [ordersById, selectedLocationId]
-  );
+  const selectedOrders = useMemo(() => {
+    if (!selectedLocation) {
+      return [];
+    }
+    return Object.values(ordersById)
+      .filter((order) => {
+        if (selectedLocation.backendTableId) {
+          return order.tableId === selectedLocation.backendTableId;
+        }
+        return order.locationId === selectedLocation.locationId;
+      })
+      .sort(sortOrdersByNewest);
+  }, [ordersById, selectedLocation]);
 
   function mergeOrders(incoming: OrderPayload[]): void {
     const currentOrders = ordersByIdRef.current;
@@ -174,39 +213,34 @@ export function useStaffConsoleData() {
     }
   }
 
-  async function loadRegistry(): Promise<void> {
+  async function loadFoundation(): Promise<LocationRecord[]> {
     setRegistryLoading(true);
     setRegistryError(null);
     try {
-      const payload = await fetchTableRegistry();
-      setTableRows(() => {
-        const next: Record<string, TableRegistryItem> = {};
-        for (const row of payload.tables) {
-          next[row.tableId] = row;
-        }
-        return next;
-      });
+      const [locationsPayload, tableRegistryPayload] = await Promise.all([
+        fetchLocations(),
+        fetchTableRegistry(),
+      ]);
+      setLocationRows(locationsPayload.locations);
+      const nextRows = mapTableRows(tableRegistryPayload.tables);
+      setTableRows(nextRows);
+      return locationsPayload.locations;
     } catch (error) {
-      setRegistryError(error instanceof Error ? error.message : "failed to load locations");
+      setRegistryError(error instanceof Error ? error.message : "failed to load staff console data");
+      return [];
     } finally {
       setRegistryLoading(false);
     }
   }
 
-  async function loadActivity(): Promise<void> {
-    setActivityLoading(true);
-    setActivityError(null);
-    try {
-      mergeOrders(await fetchKitchenOrders());
-    } catch (error) {
-      setActivityError(error instanceof Error ? error.message : "failed to load active orders");
-    } finally {
-      setActivityLoading(false);
-    }
-  }
+  async function loadSelectedLocationData(
+    locationId = selectedLocationId,
+    availableLocations: LocationRecord[] = locationRowsRef.current
+  ): Promise<void> {
+    const location = availableLocations.find((row) => row.locationId === locationId) ?? null;
+    const tableId = location?.type === "TABLE" ? locationId.replace(/^loc_/, "") : null;
 
-  async function loadSelectedLocationData(locationId = selectedLocationId): Promise<void> {
-    if (!supportsBackendLocation(locationId)) {
+    if (!tableId) {
       setSelectedSummary(null);
       setDetailError(null);
       return;
@@ -216,19 +250,19 @@ export function useStaffConsoleData() {
     setDetailError(null);
     try {
       const [orders, summary] = await Promise.all([
-        fetchLocationOrders(locationId),
-        fetchLocationSummary(locationId),
+        fetchLocationOrders(tableId),
+        fetchLocationSummary(tableId),
       ]);
       mergeOrders(orders);
       setSelectedSummary(summary);
       setTableRows((current) => {
-        const existing = current[locationId];
+        const existing = current[tableId];
         if (!existing) {
           return current;
         }
         return {
           ...current,
-          [locationId]: {
+          [tableId]: {
             ...existing,
             status: summary.status,
             openedAt: summary.openedAt,
@@ -248,21 +282,21 @@ export function useStaffConsoleData() {
   }
 
   async function refreshAll(): Promise<void> {
-    await Promise.all([loadRegistry(), loadActivity()]);
-    await loadSelectedLocationData();
+    const loadedLocations = await loadFoundation();
+    await loadSelectedLocationData(selectedLocationId, loadedLocations);
   }
 
   async function handleOpenLocation(): Promise<void> {
-    if (!selectedLocation?.supportsBackendSession) {
+    if (!selectedLocation?.backendTableId) {
       return;
     }
     setLocationActionPending("open");
     setDetailError(null);
     setDetailMessage(null);
     try {
-      await openLocation(selectedLocation.locationId);
+      await openLocation(selectedLocation.backendTableId);
       setDetailMessage(`Opened session for ${selectedLocation.label}.`);
-      await Promise.all([loadRegistry(), loadSelectedLocationData(selectedLocation.locationId)]);
+      await refreshAll();
     } catch (error) {
       setDetailError(error instanceof Error ? error.message : "failed to open session");
     } finally {
@@ -271,16 +305,16 @@ export function useStaffConsoleData() {
   }
 
   async function handleCloseLocation(): Promise<void> {
-    if (!selectedLocation?.supportsBackendSession) {
+    if (!selectedLocation?.backendTableId) {
       return;
     }
     setLocationActionPending("close");
     setDetailError(null);
     setDetailMessage(null);
     try {
-      await closeLocation(selectedLocation.locationId);
+      await closeLocation(selectedLocation.backendTableId);
       setDetailMessage(`Closed session for ${selectedLocation.label}.`);
-      await Promise.all([loadRegistry(), loadSelectedLocationData(selectedLocation.locationId)]);
+      await refreshAll();
     } catch (error) {
       setDetailError(error instanceof Error ? error.message : "failed to close session");
     } finally {
@@ -289,14 +323,7 @@ export function useStaffConsoleData() {
   }
 
   async function handleOrderAction(order: OrderPayload, action: OrderAction): Promise<void> {
-    const nextStatus =
-      action === "accept"
-        ? "ACCEPTED"
-        : action === "ready"
-          ? "READY"
-          : action === "served"
-            ? "SERVED"
-            : "SETTLED";
+    const nextStatus = action === "served" ? "SERVED" : "SETTLED";
 
     setOrderActionPending((current) => ({ ...current, [order.orderId]: true }));
     setOrderActionError((current) => {
@@ -311,15 +338,15 @@ export function useStaffConsoleData() {
     try {
       const updated = await advanceOrder(order.orderId, action);
       mergeOrders([updated]);
-      if (updated.tableId === selectedLocationId) {
-        await loadSelectedLocationData(selectedLocationId);
+      if (selectedLocation?.backendTableId && updated.tableId === selectedLocation.backendTableId) {
+        await loadSelectedLocationData(selectedLocation.locationId);
       }
     } catch (error) {
       mergeOrders([previousOrder]);
       const message = error instanceof Error ? error.message : "failed to update order";
       setOrderActionError((current) => ({ ...current, [order.orderId]: message }));
       if (message.includes("INVALID_ORDER_TRANSITION") || message.includes("CONFLICT")) {
-        await Promise.all([loadRegistry(), loadActivity(), loadSelectedLocationData(previousOrder.tableId)]);
+        await refreshAll();
       }
     } finally {
       setOrderActionPending((current) => ({ ...current, [order.orderId]: false }));
@@ -329,6 +356,19 @@ export function useStaffConsoleData() {
   useEffect(() => {
     void refreshAll();
   }, []);
+
+  useEffect(() => {
+    if (locationRows.length === 0) {
+      return;
+    }
+    const exists = locationRows.some((location) => location.locationId === selectedLocationId);
+    if (!exists) {
+      const fallbackLocation = locationRows.find((location) => location.type === "TABLE") ?? locationRows[0];
+      if (fallbackLocation) {
+        setSelectedLocationId(fallbackLocation.locationId);
+      }
+    }
+  }, [locationRows, selectedLocationId]);
 
   useEffect(() => {
     setDetailMessage(null);
@@ -349,7 +389,10 @@ export function useStaffConsoleData() {
       const order = buildOrderFromEvent(envelope.payload);
       if (order) {
         mergeOrders([order]);
-        if (order.tableId === selectedLocationId) {
+        if (
+          (selectedLocation?.backendTableId && order.tableId === selectedLocation.backendTableId) ||
+          order.locationId === selectedLocationId
+        ) {
           void loadSelectedLocationData(selectedLocationId);
         }
         return;
@@ -379,13 +422,13 @@ export function useStaffConsoleData() {
         };
       });
 
-      if (tableEvent.tableId === selectedLocationId) {
+      if (selectedLocation?.backendTableId === tableEvent.tableId) {
         void loadSelectedLocationData(selectedLocationId);
       }
     };
 
     return () => socket.close();
-  }, [selectedLocationId]);
+  }, [selectedLocation, selectedLocationId]);
 
   return {
     mode,
@@ -408,10 +451,8 @@ export function useStaffConsoleData() {
     summaryStats,
     connectionStatus,
     registryLoading,
-    activityLoading,
     detailLoading,
     registryError,
-    activityError,
     detailError,
     detailMessage,
     locationActionPending,

@@ -21,11 +21,15 @@ export type OrderLinePayload = {
 export type OrderPayload = {
   orderId: string;
   restaurantId?: string;
-  tableId: string;
+  locationId?: string;
+  tableId?: string | null;
+  sessionId?: string | null;
+  source?: string;
   status: string;
   total?: MoneyPayload | null;
   totalMoney?: MoneyPayload | null;
   createdAt: string;
+  updatedAt?: string;
   lines: OrderLinePayload[];
 };
 
@@ -44,6 +48,8 @@ export type TableCounts = {
   placed: number;
   accepted: number;
   ready: number;
+  served: number;
+  settled: number;
 };
 
 export type TableSummaryResponse = {
@@ -73,6 +79,25 @@ export type TableRegistryResponse = {
   nextCursor: string | null;
 };
 
+export type LocationRecord = {
+  locationId: string;
+  restaurantId: string;
+  type: "TABLE" | "BAR_SEAT" | "ONLINE_PICKUP" | "ONLINE_DELIVERY";
+  name: string;
+  displayLabel: string;
+  capacity: number | null;
+  zone: string | null;
+  isActive: boolean;
+  createdAt: string;
+  sessionStatus: "OPEN" | "CLOSED" | null;
+  activeSessionId: string | null;
+  lastSessionOpenedAt: string | null;
+};
+
+export type LocationsResponse = {
+  locations: LocationRecord[];
+};
+
 export type ApiErrorResponse = {
   error?: {
     code?: string;
@@ -97,7 +122,7 @@ export type EventEnvelope = {
   payload?: unknown;
 };
 
-export type LocationType = "TABLE" | "BAR_SEAT" | "KIOSK_TABLE";
+export type LocationType = LocationRecord["type"];
 export type LocationUiStatus =
   | "AVAILABLE"
   | "OCCUPIED"
@@ -109,18 +134,6 @@ export type StaffMode = "ENTRANCE" | "SERVICE";
 export type ViewportMode = "large" | "medium" | "narrow";
 export type SecondaryPane = "QUEUE" | "DETAIL";
 
-export type LocationCatalogEntry = {
-  locationId: string;
-  label: string;
-  type: LocationType;
-  zone: string;
-  seatCount: number;
-  sortOrder: number;
-  manualOnly: boolean;
-  kioskLinked: boolean;
-  supportsBackendSession: boolean;
-};
-
 export type LocationCounts = {
   ordersTotal: number;
   placed: number;
@@ -130,7 +143,19 @@ export type LocationCounts = {
   settled: number;
 };
 
-export type StaffLocation = LocationCatalogEntry & {
+export type StaffLocation = {
+  locationId: string;
+  restaurantId: string;
+  label: string;
+  type: LocationType;
+  zone: string;
+  seatCount: number;
+  sortOrder: number;
+  manualOnly: boolean;
+  scanEnabled: boolean;
+  supportsBackendSession: boolean;
+  backendTableId: string | null;
+  activeSessionId: string | null;
   backendStatus: "OPEN" | "CLOSED" | null;
   sessionOpen: boolean;
   uiStatus: LocationUiStatus;
@@ -158,4 +183,4 @@ export type SummaryStats = {
   manual: number;
 };
 
-export type OrderAction = "accept" | "ready" | "served" | "settled";
+export type OrderAction = "served" | "settled";

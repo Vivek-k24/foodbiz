@@ -4,10 +4,6 @@ import { locationStatusClass, locationTypeClass, orderStatusClass } from "./Stat
 
 function orderActionForStatus(status: string): { action: OrderAction; label: string } | null {
   switch (status) {
-    case "PLACED":
-      return { action: "accept", label: "Accept" };
-    case "ACCEPTED":
-      return { action: "ready", label: "Mark Ready" };
     case "READY":
       return { action: "served", label: "Mark Served" };
     case "SERVED":
@@ -51,13 +47,18 @@ export function DetailPane({
   if (!location) {
     return (
       <aside className="shellPane cardSurface detailPane">
-        <div className="paneHeader">
+        <div className="paneHeader stickyPaneHeader">
           <div>
             <p className="eyebrow">Detail pane</p>
             <h2 className="paneTitle">No location selected</h2>
           </div>
         </div>
-        <div className="emptyBox">Choose a location from the queue or floor pane to inspect its session, order history, and supported actions.</div>
+        <div className="paneScroll">
+          <div className="emptyBox">
+            Choose a location from the queue or floor pane to inspect its session state, recent
+            orders, and supported service actions.
+          </div>
+        </div>
       </aside>
     );
   }
@@ -65,11 +66,11 @@ export function DetailPane({
   const actionCopy =
     mode === "ENTRANCE"
       ? "Entrance mode prioritizes seating, occupancy, and quick session handling."
-      : "Service mode prioritizes live order progress, attention items, and session follow-through.";
+      : "Service mode prioritizes ready handoff, served follow-through, and unsettled table awareness.";
 
   return (
     <aside className="shellPane cardSurface detailPane">
-      <div className="paneHeader">
+      <div className="paneHeader stickyPaneHeader">
         <div>
           <p className="eyebrow">Detail pane</p>
           <h2 className="paneTitle">{location.label}</h2>
@@ -77,205 +78,213 @@ export function DetailPane({
         </div>
       </div>
 
-      {loading ? <div className="infoBox">Loading location detail...</div> : null}
-      {message ? <div className="infoBox">{message}</div> : null}
-      {error ? <div className="errorBox">{error}</div> : null}
+      <div className="paneScroll">
+        {loading ? <div className="infoBox">Loading location detail...</div> : null}
+        {message ? <div className="infoBox">{message}</div> : null}
+        {error ? <div className="errorBox">{error}</div> : null}
 
-      <div className="detailHeaderCard">
-        <div className="detailHeaderRow">
-          <div>
-            <div className="detailLocationName">{location.label}</div>
-            <p className="mutedLine monoLine">{location.locationId}</p>
+        <div className="detailHeaderCard">
+          <div className="detailHeaderRow">
+            <div>
+              <div className="detailLocationName">{location.label}</div>
+              <p className="mutedLine monoLine">{location.locationId}</p>
+            </div>
+            <div className="badgeRow">
+              <span className={locationTypeClass(location.type)}>{location.type.replace("_", " ")}</span>
+              <span className={locationStatusClass(location.uiStatus)}>{location.uiStatus}</span>
+            </div>
           </div>
-          <div className="badgeRow">
-            <span className={locationTypeClass(location.type)}>{location.type.replace("_", " ")}</span>
-            <span className={locationStatusClass(location.uiStatus)}>{location.uiStatus}</span>
+
+          <div className="detailStatsGrid">
+            <div className="detailStat">
+              <span className="tileLabel">Zone</span>
+              <strong>{location.zone}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Seats</span>
+              <strong>{location.seatCount > 0 ? location.seatCount : "-"}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Session</span>
+              <strong>{location.sessionOpen ? "Open" : location.manualOnly ? "Manual" : "Closed"}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Session ID</span>
+              <strong className="monoLine">{location.activeSessionId ?? "-"}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Opened</span>
+              <strong>{formatTimestamp(summary?.openedAt ?? location.openedAt)}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Last order</span>
+              <strong>{formatTimestamp(summary?.lastOrderAt ?? location.lastOrderAt)}</strong>
+            </div>
           </div>
         </div>
 
-        <div className="detailStatsGrid">
-          <div className="detailStat">
-            <span className="tileLabel">Zone</span>
-            <strong>{location.zone}</strong>
+        {location.manualOnly ? (
+          <div className="infoBox">
+            Bar seats remain part of floor awareness, but bar service is still handled manually outside
+            the backend-managed session and ordering flow.
           </div>
-          <div className="detailStat">
-            <span className="tileLabel">Seats</span>
-            <strong>{location.seatCount}</strong>
-          </div>
-          <div className="detailStat">
-            <span className="tileLabel">Session</span>
-            <strong>{location.sessionOpen ? "Open" : location.manualOnly ? "Manual" : "Closed"}</strong>
-          </div>
-          <div className="detailStat">
-            <span className="tileLabel">Assignment</span>
-            <strong>
-              {location.assignmentState === "UNASSIGNED"
-                ? "Unassigned"
-                : location.assignmentState === "MANUAL_ONLY"
-                  ? "Manual"
-                  : "Not applicable"}
-            </strong>
-          </div>
-          <div className="detailStat">
-            <span className="tileLabel">Opened</span>
-            <strong>{formatTimestamp(summary?.openedAt ?? location.openedAt)}</strong>
-          </div>
-          <div className="detailStat">
-            <span className="tileLabel">Last order</span>
-            <strong>{formatTimestamp(summary?.lastOrderAt ?? location.lastOrderAt)}</strong>
-          </div>
-        </div>
-      </div>
+        ) : null}
 
-      {location.manualOnly ? (
-        <div className="infoBox">
-          Bar seats are represented in the floor model, but backend session/order persistence for bar service has not been introduced yet. Treat this as a manual visibility surface for now.
-        </div>
-      ) : null}
+        {location.scanEnabled ? (
+          <div className="infoBox">
+            This table is scan-enabled for customer ordering through the web-ordering surface. FoodBiz
+            is not treating it as kiosk hardware.
+          </div>
+        ) : null}
 
-      {location.kioskLinked ? (
-        <div className="infoBox">
-          This location is marked as kiosk-capable. No kiosk client ships in this ROP, but the console keeps the session/location model compatible with one later.
-        </div>
-      ) : null}
+        {location.type === "ONLINE_PICKUP" || location.type === "ONLINE_DELIVERY" ? (
+          <div className="infoBox">
+            Off-premise locations are modeled in the platform foundation, but the staff console does not
+            currently manage them as seat-based service sessions.
+          </div>
+        ) : null}
 
-      {location.assignmentState === "UNASSIGNED" ? (
-        <div className="inlineNote">
-          Waiter ownership is not persisted in the backend yet. Service mode surfaces these sessions as unassigned so future assignment logic can attach here cleanly.
-        </div>
-      ) : null}
+        {location.assignmentState === "UNASSIGNED" ? (
+          <div className="inlineNote">
+            Waiter ownership is not persisted in the backend yet. Service mode surfaces these sessions as
+            unassigned so later assignment logic has a clear attachment point.
+          </div>
+        ) : null}
 
-      <div className="detailActionsRow">
-        <button
-          type="button"
-          className="primaryButton"
-          disabled={location.manualOnly || location.sessionOpen || locationActionPending !== null}
-          onClick={onOpenLocation}
-        >
-          {locationActionPending === "open" ? "Opening..." : "Open Session"}
-        </button>
-        <button
-          type="button"
-          className="secondaryButton"
-          disabled={location.manualOnly || !location.sessionOpen || locationActionPending !== null}
-          onClick={onCloseLocation}
-        >
-          {locationActionPending === "close" ? "Closing..." : "Close Session"}
-        </button>
-      </div>
-
-      <div className="detailSection">
-        <div className="sectionHeaderCompact">
-          <h3 className="sectionTitleSmall">Session summary</h3>
-          <span className="badge">{summary?.counts.ordersTotal ?? location.counts.ordersTotal} orders</span>
+        <div className="detailActionsRow">
+          <button
+            type="button"
+            className="primaryButton"
+            disabled={!location.supportsBackendSession || location.sessionOpen || locationActionPending !== null}
+            onClick={onOpenLocation}
+          >
+            {locationActionPending === "open" ? "Opening..." : "Open Session"}
+          </button>
+          <button
+            type="button"
+            className="secondaryButton"
+            disabled={!location.supportsBackendSession || !location.sessionOpen || locationActionPending !== null}
+            onClick={onCloseLocation}
+          >
+            {locationActionPending === "close" ? "Closing..." : "Close Session"}
+          </button>
         </div>
 
-        <div className="detailStatsGrid">
-          <div className="detailStat">
-            <span className="tileLabel">Gross total</span>
-            <strong>{formatMoneyValue(summary?.totals ?? location.totals)}</strong>
+        <div className="detailSection">
+          <div className="sectionHeaderCompact">
+            <h3 className="sectionTitleSmall">Session summary</h3>
+            <span className="badge">{summary?.counts.ordersTotal ?? location.counts.ordersTotal} orders</span>
           </div>
-          <div className="detailStat">
-            <span className="tileLabel">Placed</span>
-            <strong>{summary?.counts.placed ?? location.counts.placed}</strong>
-          </div>
-          <div className="detailStat">
-            <span className="tileLabel">Accepted</span>
-            <strong>{summary?.counts.accepted ?? location.counts.accepted}</strong>
-          </div>
-          <div className="detailStat">
-            <span className="tileLabel">Ready</span>
-            <strong>{summary?.counts.ready ?? location.counts.ready}</strong>
-          </div>
-          <div className="detailStat">
-            <span className="tileLabel">Served</span>
-            <strong>{location.counts.served}</strong>
-          </div>
-          <div className="detailStat">
-            <span className="tileLabel">Settled</span>
-            <strong>{location.counts.settled}</strong>
+
+          <div className="detailStatsGrid">
+            <div className="detailStat">
+              <span className="tileLabel">Gross total</span>
+              <strong>{formatMoneyValue(summary?.totals ?? location.totals)}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Placed</span>
+              <strong>{summary?.counts.placed ?? location.counts.placed}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Accepted</span>
+              <strong>{summary?.counts.accepted ?? location.counts.accepted}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Ready</span>
+              <strong>{summary?.counts.ready ?? location.counts.ready}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Served</span>
+              <strong>{summary?.counts.served ?? location.counts.served}</strong>
+            </div>
+            <div className="detailStat">
+              <span className="tileLabel">Settled</span>
+              <strong>{summary?.counts.settled ?? location.counts.settled}</strong>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="detailSection">
-        <div className="sectionHeaderCompact">
-          <h3 className="sectionTitleSmall">Recent orders</h3>
-          <span className="badge">{orders.length}</span>
-        </div>
-
-        {orders.length === 0 ? (
-          <div className="emptyBox">
-            {location.manualOnly
-              ? "No backend-managed order history is available for manual bar seats."
-              : "No orders have been recorded for this location yet."}
+        <div className="detailSection">
+          <div className="sectionHeaderCompact">
+            <h3 className="sectionTitleSmall">Recent orders</h3>
+            <span className="badge">{orders.length}</span>
           </div>
-        ) : (
-          <div className="detailOrderList">
-            {orders.map((order) => {
-              const action = orderActionForStatus(order.status);
-              const pending = orderActionPending[order.orderId] === true;
-              const actionError = orderActionError[order.orderId];
 
-              return (
-                <article key={order.orderId} className="detailOrderCard">
-                  <div className="detailHeaderRow">
-                    <div>
-                      <div className="detailLocationName monoLine">{order.orderId}</div>
-                      <p className="mutedLine">Created {formatTimestamp(order.createdAt)}</p>
+          {orders.length === 0 ? (
+            <div className="emptyBox">
+              {location.manualOnly
+                ? "No backend-managed order history is available for manual bar seats."
+                : location.supportsBackendSession
+                  ? "No orders have been recorded for this location yet."
+                  : "Detailed order history is not exposed for this location type in the current API."}
+            </div>
+          ) : (
+            <div className="detailOrderList">
+              {orders.map((order) => {
+                const action = orderActionForStatus(order.status);
+                const pending = orderActionPending[order.orderId] === true;
+                const actionError = orderActionError[order.orderId];
+
+                return (
+                  <article key={order.orderId} className="detailOrderCard">
+                    <div className="detailHeaderRow">
+                      <div>
+                        <div className="detailLocationName monoLine">{order.orderId}</div>
+                        <p className="mutedLine">Created {formatTimestamp(order.createdAt)}</p>
+                      </div>
+                      <span className={orderStatusClass(order.status)}>{order.status}</span>
                     </div>
-                    <span className={orderStatusClass(order.status)}>{order.status}</span>
-                  </div>
 
-                  <div className="orderSummaryRow mutedLine">
-                    <span>Total {formatMoneyValue(getOrderMoney(order))}</span>
-                    <span>{order.lines.length} line items</span>
-                  </div>
+                    <div className="orderSummaryRow mutedLine">
+                      <span>Total {formatMoneyValue(getOrderMoney(order))}</span>
+                      <span>{order.lines.length} line items</span>
+                    </div>
 
-                  <ul className="orderLineList">
-                    {order.lines.map((line) => (
-                      <li key={line.lineId} className="orderLineItem">
-                        <div>
-                          <span className="monoLine">{line.quantity}x</span> {line.name}
-                        </div>
-                        {Array.isArray(line.modifiers) && line.modifiers.length > 0 ? (
-                          <div className="chipGroup">
-                            {line.modifiers.map((modifier) => (
-                              <span
-                                key={`${line.lineId}-${modifier.code}-${modifier.value}`}
-                                className="miniChip"
-                              >
-                                {formatModifierValue(modifier)}
-                              </span>
-                            ))}
+                    <ul className="orderLineList">
+                      {order.lines.map((line) => (
+                        <li key={line.lineId} className="orderLineItem">
+                          <div>
+                            <span className="monoLine">{line.quantity}x</span> {line.name}
                           </div>
-                        ) : null}
-                        {typeof line.notes === "string" && line.notes.trim() ? (
-                          <p className="mutedLine">Notes: {line.notes}</p>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
+                          {Array.isArray(line.modifiers) && line.modifiers.length > 0 ? (
+                            <div className="chipGroup">
+                              {line.modifiers.map((modifier) => (
+                                <span
+                                  key={`${line.lineId}-${modifier.code}-${modifier.value}`}
+                                  className="miniChip"
+                                >
+                                  {formatModifierValue(modifier)}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {typeof line.notes === "string" && line.notes.trim() ? (
+                            <p className="mutedLine">Notes: {line.notes}</p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
 
-                  {action ? (
-                    <div className="detailActionsRow">
-                      <button
-                        type="button"
-                        className="secondaryButton"
-                        disabled={pending}
-                        onClick={() => onOrderAction(order, action.action)}
-                      >
-                        {pending ? "Updating..." : action.label}
-                      </button>
-                    </div>
-                  ) : null}
+                    {action ? (
+                      <div className="detailActionsRow">
+                        <button
+                          type="button"
+                          className="secondaryButton"
+                          disabled={pending}
+                          onClick={() => onOrderAction(order, action.action)}
+                        >
+                          {pending ? "Updating..." : action.label}
+                        </button>
+                      </div>
+                    ) : null}
 
-                  {actionError ? <div className="errorBox">{actionError}</div> : null}
-                </article>
-              );
-            })}
-          </div>
-        )}
+                    {actionError ? <div className="errorBox">{actionError}</div> : null}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </aside>
   );

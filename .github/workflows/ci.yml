@@ -220,12 +220,19 @@ jobs:
           set -euo pipefail
           echo "Frontend packages currently expose build scripts only; lint/test scripts are not configured yet."
 
-      - name: Build dashboard
+      - name: Build staff console
         run: |
           set -euo pipefail
           mkdir -p artifacts/frontend
           cd repo/frontend
           pnpm --filter dashboard build | tee ../../artifacts/frontend/dashboard-build.log
+
+      - name: Build kitchen display
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/frontend
+          cd repo/frontend
+          pnpm --filter kitchen-display build | tee ../../artifacts/frontend/kitchen-display-build.log
 
       - name: Build web-ordering
         run: |
@@ -233,6 +240,13 @@ jobs:
           mkdir -p artifacts/frontend
           cd repo/frontend
           pnpm --filter web-ordering build | tee ../../artifacts/frontend/web-ordering-build.log
+
+      - name: Build restaurant site
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/frontend
+          cd repo/frontend
+          pnpm --filter restaurant-site build | tee ../../artifacts/frontend/restaurant-site-build.log
 
       - name: Upload frontend build logs on failure
         if: failure()

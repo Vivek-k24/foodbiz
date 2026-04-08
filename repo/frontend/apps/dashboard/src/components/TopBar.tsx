@@ -2,10 +2,11 @@ import { venueName } from "../lib/locationCatalog";
 import type { StaffLocation, StaffMode, SummaryStats } from "../lib/types";
 
 const typeFilterOptions: Array<{ value: StaffLocation["type"] | "ALL"; label: string }> = [
-  { value: "ALL", label: "All types" },
-  { value: "TABLE", label: "Tables" },
-  { value: "KIOSK_TABLE", label: "Kiosk tables" },
+  { value: "ALL", label: "All locations" },
+  { value: "TABLE", label: "Dining tables" },
   { value: "BAR_SEAT", label: "Bar seats" },
+  { value: "ONLINE_PICKUP", label: "Pickup lane" },
+  { value: "ONLINE_DELIVERY", label: "Delivery lane" },
 ];
 
 const statusFilterOptions: Array<{ value: StaffLocation["uiStatus"] | "ALL"; label: string }> = [
@@ -53,7 +54,9 @@ export function TopBar({
         <p className="eyebrow">Browser Staff Console</p>
         <h1 className="pageTitle">{venueName}</h1>
         <p className="pageSubtitle">
-          Responsive entrance and service operations surface built on the live FoodBiz REST and websocket flows.
+          Responsive entrance and service operations surface aligned to live locations, sessions,
+          and service follow-through. Kitchen prep progression now belongs in the dedicated kitchen
+          display.
         </p>
       </div>
 
@@ -84,7 +87,11 @@ export function TopBar({
           <strong>{summaryStats.attention}</strong>
         </div>
         <div className="summaryMetric">
-          <span className="summaryLabel">Bar seats</span>
+          <span className="summaryLabel">Ordering</span>
+          <strong>{summaryStats.ordering}</strong>
+        </div>
+        <div className="summaryMetric">
+          <span className="summaryLabel">Bar awareness</span>
           <strong>{summaryStats.manual}</strong>
         </div>
       </div>

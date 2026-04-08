@@ -12,6 +12,13 @@ type AllowedModifier = {
   options?: string[] | null;
 };
 
+type MenuCategory = {
+  categoryId: string;
+  name: string;
+  categoryKind: "FOOD" | "DRINK";
+  cuisineOrFamily: string;
+};
+
 type MenuItem = {
   itemId: string;
   name: string;
@@ -26,7 +33,27 @@ type MenuResponse = {
   menuId: string;
   restaurantId: string;
   menuVersion: number;
+  categories: MenuCategory[];
   items: MenuItem[];
+};
+
+type LocationRecord = {
+  locationId: string;
+  restaurantId: string;
+  type: "TABLE" | "BAR_SEAT" | "ONLINE_PICKUP" | "ONLINE_DELIVERY";
+  name: string;
+  displayLabel: string;
+  capacity: number | null;
+  zone: string | null;
+  isActive: boolean;
+  createdAt: string;
+  sessionStatus: "OPEN" | "CLOSED" | null;
+  activeSessionId: string | null;
+  lastSessionOpenedAt: string | null;
+};
+
+type LocationsResponse = {
+  locations: LocationRecord[];
 };
 
 type OrderMoney = {
@@ -49,9 +76,10 @@ type OrderLine = {
   modifiers?: OrderLineModifier[] | null;
 };
 
-type TableOrder = {
+type OrderResponse = {
   orderId: string;
-  tableId: string;
+  tableId?: string | null;
+  locationId?: string | null;
   status: string;
   total?: OrderMoney | null;
   totalMoney?: OrderMoney | null;
@@ -60,7 +88,7 @@ type TableOrder = {
 };
 
 type TableOrdersResponse = {
-  orders: TableOrder[];
+  orders: OrderResponse[];
   nextCursor: string | null;
 };
 
@@ -84,18 +112,110 @@ type CartLine = {
   modifierValues: Record<string, string>;
 };
 
+type EntryMode = "DINE_IN" | "ONLINE_PICKUP" | "ONLINE_DELIVERY";
+
+type OrderingUrlState = {
+  mode: EntryMode | null;
+  tableId: string | null;
+  locationId: string | null;
+};
+
+type ActiveContext = {
+  mode: EntryMode;
+  locationId: string | null;
+  tableId: string | null;
+  sessionId: string | null;
+  label: string;
+  subtitle: string;
+  scanSource: boolean;
+  orderable: boolean;
+  orderableMessage: string;
+};
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
-const selectedTableStorageKey = "rop.selectedTableId";
+const restaurantId = "rst_001";
 
-function readInitialTableId(): string {
+function readInitialUrlState(): OrderingUrlState {
   if (typeof window === "undefined") {
-    return "tbl_001";
+    return { mode: "ONLINE_PICKUP", tableId: null, locationId: null };
   }
-  return window.localStorage.getItem(selectedTableStorageKey) || "tbl_001";
+  const params = new URL(window.location.href).searchParams;
+  const rawMode = params.get("mode")?.toLowerCase();
+  const mode =
+    rawMode === "pickup"
+      ? "ONLINE_PICKUP"
+      : rawMode === "delivery"
+        ? "ONLINE_DELIVERY"
+        : rawMode === "dine-in"
+          ? "DINE_IN"
+          : null;
+  const rawTableId = params.get("tableId");
+  const rawLocationId = params.get("locationId");
+  return {
+    mode,
+    tableId: rawTableId?.trim() || null,
+    locationId: rawLocationId?.trim() || null,
+  };
 }
 
-function buildIdempotencyKey(tableId: string): string {
+function applyUrlState(state: OrderingUrlState): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.delete("mode");
+  url.searchParams.delete("tableId");
+  url.searchParams.delete("locationId");
+
+  if (state.mode === "ONLINE_PICKUP") {
+    url.searchParams.set("mode", "pickup");
+  }
+  if (state.mode === "ONLINE_DELIVERY") {
+    url.searchParams.set("mode", "delivery");
+  }
+  if (state.mode === "DINE_IN") {
+    url.searchParams.set("mode", "dine-in");
+  }
+  if (state.tableId) {
+    url.searchParams.set("tableId", state.tableId);
+  }
+  if (state.locationId) {
+    url.searchParams.set("locationId", state.locationId);
+  }
+
+  window.history.replaceState(null, "", url.toString());
+}
+
+function normalizeTableId(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("loc_tbl_")) {
+    return trimmed.replace(/^loc_/, "");
+  }
+  return trimmed;
+}
+
+function locationIdFromTableId(tableId: string | null): string | null {
+  if (!tableId) {
+    return null;
+  }
+  const trimmed = tableId.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("loc_tbl_")) {
+    return trimmed;
+  }
+  return `loc_${trimmed}`;
+}
+
+function buildIdempotencyKey(context: ActiveContext): string {
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, "0");
   const stamp = [
@@ -107,7 +227,7 @@ function buildIdempotencyKey(tableId: string): string {
     pad(now.getSeconds()),
   ].join("");
   const random = Math.random().toString(36).slice(2, 8).padEnd(6, "0");
-  return `rop8-${tableId}-${stamp}-${random}`;
+  return `rop14-${context.mode.toLowerCase()}-${context.locationId ?? "none"}-${stamp}-${random}`;
 }
 
 function formatMenuMoney(money: Money): string {
@@ -138,7 +258,7 @@ function formatTimestamp(value: string | null | undefined): string {
   return date.toLocaleString();
 }
 
-function normalizeOrder(order: TableOrder): TableOrder {
+function normalizeOrder(order: OrderResponse): OrderResponse {
   return {
     ...order,
     totalMoney: order.totalMoney ?? order.total ?? null,
@@ -146,7 +266,7 @@ function normalizeOrder(order: TableOrder): TableOrder {
   };
 }
 
-function getOrderMoney(order: TableOrder): OrderMoney | null | undefined {
+function getOrderMoney(order: OrderResponse): OrderMoney | null | undefined {
   return order.totalMoney ?? order.total;
 }
 
@@ -199,55 +319,197 @@ async function readErrorMessage(response: Response): Promise<string> {
   return `request failed (${response.status})`;
 }
 
+function MenuCategorySection({
+  title,
+  sections,
+  onAddItem,
+}: {
+  title: string;
+  sections: Array<{ category: MenuCategory; items: MenuItem[] }>;
+  onAddItem: (item: MenuItem) => void;
+}) {
+  return (
+    <section>
+      <div className="sectionHeader">
+        <h3 className="subheading">{title}</h3>
+        <span className="badge">
+          {sections.reduce((total, section) => total + section.items.length, 0)} items
+        </span>
+      </div>
+      <div className="sectionStack compactStack">
+        {sections.map(({ category, items }) => (
+          <section key={category.categoryId} className="categorySection">
+            <div className="categoryHeader">
+              <div>
+                <h4 className="subheading">{category.name}</h4>
+                <p className="muted">{category.cuisineOrFamily.replace(/_/g, " ")}</p>
+              </div>
+              <span className="badge">{items.length}</span>
+            </div>
+            <div className="menuGrid">
+              {items.map((item) => (
+                <article key={item.itemId} className="menuCard">
+                  <div className="rowHeader">
+                    <div>
+                      <h3 className="subheading">{item.name}</h3>
+                      <p className="muted mono">{item.itemId}</p>
+                    </div>
+                    <span className={item.isAvailable ? "chip chipPlaced" : "chip chipClosed"}>
+                      {item.isAvailable ? "Available" : "Unavailable"}
+                    </span>
+                  </div>
+                  <p className="menuPrice">{formatMenuMoney(item.priceMoney)}</p>
+                  <p className="rowBody">{item.description?.trim() || "No description provided."}</p>
+                  <div className="divider" />
+                  <button
+                    type="button"
+                    className="btn btnPrimary"
+                    onClick={() => onAddItem(item)}
+                    disabled={!item.isAvailable}
+                  >
+                    Add to Cart
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function MenuPage() {
   const [menu, setMenu] = useState<MenuResponse | null>(null);
+  const [locations, setLocations] = useState<LocationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [orderResult, setOrderResult] = useState<string | null>(null);
-  const [tableOrders, setTableOrders] = useState<Record<string, TableOrder>>({});
+  const [tableOrders, setTableOrders] = useState<Record<string, OrderResponse>>({});
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState("Connecting");
-  const [tableId, setTableId] = useState(readInitialTableId);
+  const [urlState, setUrlState] = useState<OrderingUrlState>(readInitialUrlState);
+  const [supportTableId, setSupportTableId] = useState("");
 
-  const menuEndpoint = useMemo(() => `${apiBaseUrl}/v1/restaurants/rst_001/menu`, []);
+  function setNextUrlState(next: OrderingUrlState): void {
+    setUrlState(next);
+    applyUrlState(next);
+  }
+
+  const resolvedTableId = useMemo(() => normalizeTableId(urlState.tableId), [urlState.tableId]);
+  const resolvedLocationId = useMemo(
+    () => urlState.locationId ?? locationIdFromTableId(resolvedTableId),
+    [resolvedTableId, urlState.locationId]
+  );
+
+  const scanLocation = useMemo(() => {
+    if (!resolvedLocationId) {
+      return null;
+    }
+    return locations.find((location) => location.locationId === resolvedLocationId) ?? null;
+  }, [locations, resolvedLocationId]);
+
+  const pickupLocation = useMemo(
+    () => locations.find((location) => location.locationId === "loc_online_pickup") ?? null,
+    [locations]
+  );
+  const deliveryLocation = useMemo(
+    () => locations.find((location) => location.locationId === "loc_online_delivery") ?? null,
+    [locations]
+  );
+
+  const activeContext = useMemo<ActiveContext>(() => {
+    if (scanLocation && (urlState.mode === null || urlState.mode === "DINE_IN")) {
+      const tableId =
+        normalizeTableId(urlState.tableId) ?? scanLocation.locationId.replace(/^loc_/, "");
+      const orderable = scanLocation.sessionStatus === "OPEN" && !!scanLocation.activeSessionId;
+      return {
+        mode: "DINE_IN",
+        locationId: scanLocation.locationId,
+        tableId,
+        sessionId: scanLocation.activeSessionId,
+        label: scanLocation.displayLabel,
+        subtitle: orderable
+          ? `Dine-in ordering is attached to the open session for ${scanLocation.displayLabel}.`
+          : `This scan-aware table exists, but staff has not opened the dining session yet.`,
+        scanSource: true,
+        orderable,
+        orderableMessage: orderable
+          ? "Ready to order."
+          : "Ask staff to open the table session before ordering.",
+      };
+    }
+
+    if (urlState.mode === "ONLINE_DELIVERY") {
+      return {
+        mode: "ONLINE_DELIVERY",
+        locationId: deliveryLocation?.locationId ?? null,
+        tableId: null,
+        sessionId: null,
+        label: deliveryLocation?.displayLabel ?? "Online Delivery",
+        subtitle:
+          "Delivery ordering uses an off-premise location context instead of a dining session.",
+        scanSource: false,
+        orderable: deliveryLocation !== null,
+        orderableMessage: deliveryLocation
+          ? "Delivery orders are enabled."
+          : "Delivery location is unavailable.",
+      };
+    }
+
+    return {
+      mode: "ONLINE_PICKUP",
+      locationId: pickupLocation?.locationId ?? null,
+      tableId: null,
+      sessionId: null,
+      label: pickupLocation?.displayLabel ?? "Online Pickup",
+      subtitle:
+        "Pickup ordering stays customer-facing and separate from internal staff workflows.",
+      scanSource: false,
+      orderable: pickupLocation !== null,
+      orderableMessage: pickupLocation
+        ? "Pickup orders are enabled."
+        : "Pickup location is unavailable.",
+    };
+  }, [deliveryLocation, pickupLocation, scanLocation, urlState.mode, urlState.tableId]);
+
+  const canUseDineInMode = scanLocation?.type === "TABLE";
+
+  const menuEndpoint = useMemo(() => `${apiBaseUrl}/v1/restaurants/${restaurantId}/menu`, []);
+  const locationsEndpoint = useMemo(
+    () => `${apiBaseUrl}/v1/restaurants/${restaurantId}/locations?is_active=true`,
+    []
+  );
   const tableOrdersEndpoint = useMemo(
     () =>
-      `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(
-        tableId
-      )}/orders?status=ALL&limit=50`,
-    [tableId]
-  );
-  const placeOrderEndpoint = useMemo(
-    () => `${apiBaseUrl}/v1/restaurants/rst_001/tables/${encodeURIComponent(tableId)}/orders`,
-    [tableId]
+      activeContext.tableId
+        ? `${apiBaseUrl}/v1/restaurants/${restaurantId}/tables/${encodeURIComponent(
+            activeContext.tableId
+          )}/orders?status=ALL&limit=50`
+        : null,
+    [activeContext.tableId]
   );
   const wsUrl = useMemo(() => {
     const url = new URL("/ws", wsBaseUrl);
-    url.searchParams.set("restaurant_id", "rst_001");
-    url.searchParams.set("role", "TABLET");
+    url.searchParams.set("restaurant_id", restaurantId);
+    url.searchParams.set("role", "WEB_ORDERING");
     return url.toString();
   }, []);
 
-  function mergeOrders(incoming: TableOrder[]): void {
+  function mergeOrders(incoming: OrderResponse[]): void {
     setTableOrders((current) => {
       const next = { ...current };
       for (const incomingOrder of incoming) {
-        if (!incomingOrder.orderId || incomingOrder.tableId !== tableId) {
-          continue;
-        }
         next[incomingOrder.orderId] = normalizeOrder(incomingOrder);
       }
       return next;
     });
   }
 
-  function updateCartLine(
-    cartLineId: string,
-    updater: (line: CartLine) => CartLine
-  ): void {
+  function updateCartLine(cartLineId: string, updater: (line: CartLine) => CartLine): void {
     setCart((current) =>
       current.map((line) => (line.cartLineId === cartLineId ? updater(line) : line))
     );
@@ -274,6 +536,10 @@ export function MenuPage() {
   }
 
   async function loadTableOrders(): Promise<void> {
+    if (!tableOrdersEndpoint) {
+      setTableOrders({});
+      return;
+    }
     setOrdersLoading(true);
     setOrdersError(null);
     try {
@@ -282,38 +548,45 @@ export function MenuPage() {
         throw new Error(await readErrorMessage(response));
       }
       const payload = (await response.json()) as TableOrdersResponse;
+      setTableOrders({});
       mergeOrders(payload.orders);
     } catch (loadError) {
-      setOrdersError(loadError instanceof Error ? loadError.message : "failed to load table orders");
+      setOrdersError(
+        loadError instanceof Error ? loadError.message : "failed to load location orders"
+      );
     } finally {
       setOrdersLoading(false);
     }
   }
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(selectedTableStorageKey, tableId);
-    }
-  }, [tableId]);
-
-  useEffect(() => {
     let active = true;
 
-    async function loadMenu(): Promise<void> {
+    async function loadFoundation(): Promise<void> {
       setLoading(true);
       try {
-        const response = await fetch(menuEndpoint);
-        if (!response.ok) {
-          throw new Error(await readErrorMessage(response));
+        const [menuResponse, locationsResponse] = await Promise.all([
+          fetch(menuEndpoint),
+          fetch(locationsEndpoint),
+        ]);
+        if (!menuResponse.ok) {
+          throw new Error(await readErrorMessage(menuResponse));
         }
-        const payload = (await response.json()) as MenuResponse;
+        if (!locationsResponse.ok) {
+          throw new Error(await readErrorMessage(locationsResponse));
+        }
+        const menuPayload = (await menuResponse.json()) as MenuResponse;
+        const locationPayload = (await locationsResponse.json()) as LocationsResponse;
         if (active) {
-          setMenu(payload);
+          setMenu(menuPayload);
+          setLocations(locationPayload.locations);
           setError(null);
         }
       } catch (loadError) {
         if (active) {
-          setError(loadError instanceof Error ? loadError.message : "unknown error");
+          setError(
+            loadError instanceof Error ? loadError.message : "failed to load ordering data"
+          );
         }
       } finally {
         if (active) {
@@ -322,14 +595,13 @@ export function MenuPage() {
       }
     }
 
-    void loadMenu();
+    void loadFoundation();
     return () => {
       active = false;
     };
-  }, [menuEndpoint]);
+  }, [locationsEndpoint, menuEndpoint]);
 
   useEffect(() => {
-    setTableOrders({});
     setOrderResult(null);
     void loadTableOrders();
   }, [tableOrdersEndpoint]);
@@ -346,15 +618,23 @@ export function MenuPage() {
         if (!payload || typeof payload.orderId !== "string") {
           return;
         }
-        if (String(payload.tableId ?? "") !== tableId) {
+        const payloadTableId = typeof payload.tableId === "string" ? payload.tableId : null;
+        const payloadLocationId =
+          typeof payload.locationId === "string" ? payload.locationId : null;
+        const matchesContext =
+          (activeContext.tableId && payloadTableId === activeContext.tableId) ||
+          (activeContext.locationId && payloadLocationId === activeContext.locationId);
+        if (!matchesContext) {
           return;
         }
         mergeOrders([
           {
             orderId: payload.orderId,
-            tableId: String(payload.tableId ?? ""),
+            tableId: payloadTableId,
+            locationId: payloadLocationId,
             status: String(payload.status ?? ""),
             totalMoney: payload.totalMoney as OrderMoney | null | undefined,
+            total: payload.total as OrderMoney | null | undefined,
             createdAt: String(payload.createdAt ?? ""),
             lines: Array.isArray(payload.lines) ? (payload.lines as OrderLine[]) : [],
           },
@@ -364,23 +644,28 @@ export function MenuPage() {
       }
     };
     return () => socket.close();
-  }, [tableId, wsUrl]);
+  }, [activeContext.locationId, activeContext.tableId, wsUrl]);
 
   async function submitOrder(): Promise<void> {
-    if (cart.length === 0) {
+    if (cart.length === 0 || !activeContext.locationId) {
       return;
     }
 
     setPlacingOrder(true);
     setOrderResult(null);
     try {
-      const response = await fetch(placeOrderEndpoint, {
+      const response = await fetch(`${apiBaseUrl}/v1/orders`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": buildIdempotencyKey(tableId),
+          "Idempotency-Key": buildIdempotencyKey(activeContext),
         },
         body: JSON.stringify({
+          restaurantId,
+          locationId: activeContext.locationId,
+          sessionId: activeContext.sessionId,
+          tableId: activeContext.tableId,
+          source: activeContext.mode,
           lines: cart.map((line) => ({
             itemId: line.item.itemId,
             quantity: line.quantity,
@@ -399,23 +684,25 @@ export function MenuPage() {
                       ? { code: modifier.code, label: modifier.label, value: value.trim() }
                       : null;
                   }
-                  return value
-                    ? { code: modifier.code, label: modifier.label, value }
-                    : null;
+                  return value ? { code: modifier.code, label: modifier.label, value } : null;
                 })
-                .filter((modifier): modifier is { code: string; label: string; value: string } => modifier !== null)
-                || null,
+                .filter(
+                  (modifier): modifier is { code: string; label: string; value: string } =>
+                    modifier !== null
+                ) || null,
           })),
         }),
       });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
-      const payload = normalizeOrder((await response.json()) as TableOrder);
+      const payload = normalizeOrder((await response.json()) as OrderResponse);
       mergeOrders([payload]);
       setCart([]);
-      setOrderResult(`Created order ${payload.orderId} for ${tableId}`);
-      await loadTableOrders();
+      setOrderResult(`Created order ${payload.orderId} for ${activeContext.label}`);
+      if (activeContext.tableId) {
+        await loadTableOrders();
+      }
     } catch (placeError) {
       setOrderResult(placeError instanceof Error ? placeError.message : "order failed");
     } finally {
@@ -423,37 +710,60 @@ export function MenuPage() {
     }
   }
 
-  const foodItems = useMemo(
-    () =>
-      (menu?.items ?? [])
-        .filter((item) => !item.itemId.startsWith("drink_"))
-        .sort((left, right) => left.itemId.localeCompare(right.itemId)),
+  function applySupportTable(): void {
+    const normalized = normalizeTableId(supportTableId);
+    if (!normalized) {
+      return;
+    }
+    setNextUrlState({
+      mode: "DINE_IN",
+      tableId: normalized,
+      locationId: locationIdFromTableId(normalized),
+    });
+  }
+
+  const categoryById = useMemo(
+    () => new Map((menu?.categories ?? []).map((category) => [category.categoryId, category])),
     [menu]
   );
-  const drinkItems = useMemo(
+
+  const foodSections = useMemo(
     () =>
-      (menu?.items ?? [])
-        .filter((item) => item.itemId.startsWith("drink_"))
-        .sort((left, right) => left.itemId.localeCompare(right.itemId)),
+      (menu?.categories ?? [])
+        .filter((category) => category.categoryKind === "FOOD")
+        .map((category) => ({
+          category,
+          items: (menu?.items ?? []).filter((item) => item.categoryId === category.categoryId),
+        }))
+        .filter((section) => section.items.length > 0),
     [menu]
   );
+
+  const drinkSections = useMemo(
+    () =>
+      (menu?.categories ?? [])
+        .filter((category) => category.categoryKind === "DRINK")
+        .map((category) => ({
+          category,
+          items: (menu?.items ?? []).filter((item) => item.categoryId === category.categoryId),
+        }))
+        .filter((section) => section.items.length > 0),
+    [menu]
+  );
+
   const orderedTableOrders = useMemo(
     () =>
-      Object.values(tableOrders)
-        .filter((order) => order.tableId === tableId)
-        .sort(
-          (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-        ),
-    [tableId, tableOrders]
-  );
-  const cartTotal = useMemo(
-    () =>
-      cart.reduce(
-        (total, line) => total + line.item.priceMoney.amountCents * line.quantity,
-        0
+      Object.values(tableOrders).sort(
+        (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
       ),
+    [tableOrders]
+  );
+
+  const cartTotal = useMemo(
+    () => cart.reduce((total, line) => total + line.item.priceMoney.amountCents * line.quantity, 0),
     [cart]
   );
+
   const orderResultIsError = orderResult !== null && !orderResult.startsWith("Created order ");
 
   if (loading) {
@@ -461,31 +771,21 @@ export function MenuPage() {
       <main className="container">
         <section className="card">
           <div className="cardBody">
-            <div className="infoBox">Loading menu...</div>
+            <div className="infoBox">Loading ordering surface...</div>
           </div>
         </section>
       </main>
     );
   }
 
-  if (error) {
+  if (error || !menu) {
     return (
       <main className="container">
         <section className="card">
           <div className="cardBody">
-            <div className="errorBox">Failed to load menu: {error}</div>
-          </div>
-        </section>
-      </main>
-    );
-  }
-
-  if (!menu) {
-    return (
-      <main className="container">
-        <section className="card">
-          <div className="cardBody">
-            <div className="emptyState">No menu available.</div>
+            <div className="errorBox">
+              Failed to load ordering data: {error ?? "menu unavailable"}
+            </div>
           </div>
         </section>
       </main>
@@ -496,11 +796,11 @@ export function MenuPage() {
     <main className="container">
       <header className="header">
         <div>
-          <p className="eyebrow">Restaurant Operating Platform</p>
-          <h1 className="title">Italian Ordering Demo</h1>
+          <p className="eyebrow">Browser Ordering Surface</p>
+          <h1 className="title">FoodBiz Ordering</h1>
           <p className="subtitle">
-            Browse <span className="mono">{menu.items.length}</span> seeded items, build a cart,
-            and place an order for table <span className="mono">{tableId}</span>.
+            Dine-in uses scan-aware table context when present. Pickup and delivery stay available as
+            browser-first paths.
           </p>
         </div>
         <div className={connectionStatus === "Connected" ? "badge badgeStrong" : "badge badgeMuted"}>
@@ -511,33 +811,94 @@ export function MenuPage() {
       <section className="card">
         <div className="cardHeader">
           <div>
-            <h2 className="sectionTitle">Ordering Controls</h2>
-            <p className="hint">The selected table is stored locally and reused after refresh.</p>
+            <h2 className="sectionTitle">Entry context</h2>
+            <p className="hint">
+              The URL is now the primary dine-in entry source so future signed QR links can plug in
+              cleanly.
+            </p>
           </div>
-          <span className="badge mono">{tableId}</span>
+          <span className="badge">{activeContext.label}</span>
         </div>
-        <div className="cardBody">
-          <div className="controlGrid">
-            <div className="fieldGroup">
-              <label className="label" htmlFor="table-id-input">
-                Table ID
-              </label>
-              <input
-                id="table-id-input"
-                className="input mono"
-                type="text"
-                value={tableId}
-                onChange={(event) => setTableId(event.target.value.trim() || "tbl_001")}
-              />
-            </div>
-            <div className="fieldGroup">
-              <span className="label">Cart Summary</span>
-              <div className="summaryBar">
-                <span>{cart.length} lines</span>
-                <span>{formatMenuMoney({ amountCents: cartTotal, currency: "USD" })}</span>
+        <div className="cardBody sectionStack">
+          <div className="contextSwitch" role="tablist" aria-label="Ordering modes">
+            <button
+              type="button"
+              className={`contextButton ${activeContext.mode === "DINE_IN" ? "contextButtonActive" : ""}`}
+              disabled={!canUseDineInMode}
+              onClick={() =>
+                setNextUrlState({
+                  mode: "DINE_IN",
+                  tableId: resolvedTableId,
+                  locationId: resolvedLocationId,
+                })
+              }
+            >
+              {canUseDineInMode
+                ? `Dine-In ${activeContext.scanSource ? `(${activeContext.label})` : ""}`
+                : "Scan a table QR"}
+            </button>
+            <button
+              type="button"
+              className={`contextButton ${activeContext.mode === "ONLINE_PICKUP" ? "contextButtonActive" : ""}`}
+              onClick={() => setNextUrlState({ mode: "ONLINE_PICKUP", tableId: null, locationId: null })}
+            >
+              Pickup
+            </button>
+            <button
+              type="button"
+              className={`contextButton ${activeContext.mode === "ONLINE_DELIVERY" ? "contextButtonActive" : ""}`}
+              onClick={() =>
+                setNextUrlState({ mode: "ONLINE_DELIVERY", tableId: null, locationId: null })
+              }
+            >
+              Delivery
+            </button>
+          </div>
+
+          <div className="contextCard">
+            <div className="rowHeader">
+              <div>
+                <h3 className="subheading">{activeContext.label}</h3>
+                <p className="hint">{activeContext.subtitle}</p>
+              </div>
+              <div className="badgeRow">
+                <span className="badge mono">{activeContext.locationId ?? "No location"}</span>
+                {activeContext.tableId ? <span className="badge mono">{activeContext.tableId}</span> : null}
               </div>
             </div>
+            <div className={activeContext.orderable ? "infoBox" : "errorBox"}>
+              {activeContext.orderableMessage}
+            </div>
           </div>
+
+          {!canUseDineInMode ? (
+            <div className="infoBox">
+              No dine-in scan context is present. Use pickup or delivery, or open the support override
+              to test a table manually.
+            </div>
+          ) : null}
+
+          <details className="supportPanel">
+            <summary>Support override for manual table lookup</summary>
+            <div className="supportGrid">
+              <div className="fieldGroup">
+                <label className="label" htmlFor="support-table-id">
+                  Table ID
+                </label>
+                <input
+                  id="support-table-id"
+                  className="input mono"
+                  type="text"
+                  placeholder="tbl_001"
+                  value={supportTableId}
+                  onChange={(event) => setSupportTableId(event.target.value)}
+                />
+              </div>
+              <button type="button" className="btn btnSecondary" onClick={applySupportTable}>
+                Apply table context
+              </button>
+            </div>
+          </details>
 
           {orderResult ? (
             <div className={orderResultIsError ? "errorBox" : "infoBox"}>{orderResult}</div>
@@ -550,76 +911,15 @@ export function MenuPage() {
           <div className="cardHeader">
             <div>
               <h2 className="sectionTitle">Menu</h2>
-              <p className="hint">Food and drinks render separately, and each card carries item-specific modifier controls into the cart.</p>
+              <p className="hint">
+                Menu sections now follow backend category metadata instead of item-id naming hacks.
+              </p>
             </div>
             <span className="badge">{menu.items.length} items</span>
           </div>
           <div className="cardBody sectionStack">
-            <section>
-              <div className="sectionHeader">
-                <h3 className="subheading">Food</h3>
-                <span className="badge">{foodItems.length}</span>
-              </div>
-              <div className="menuGrid">
-                {foodItems.map((item) => (
-                  <article key={item.itemId} className="menuCard">
-                    <div className="rowHeader">
-                      <div>
-                        <h3 className="subheading">{item.name}</h3>
-                        <p className="muted mono">{item.itemId}</p>
-                      </div>
-                      <span className={item.isAvailable ? "chip chipPlaced" : "chip chipClosed"}>
-                        {item.isAvailable ? "Available" : "Unavailable"}
-                      </span>
-                    </div>
-                    <p className="menuPrice">{formatMenuMoney(item.priceMoney)}</p>
-                    <p className="rowBody">{item.description?.trim() || "No description provided."}</p>
-                    <div className="divider" />
-                    <button
-                      type="button"
-                      className="btn btnPrimary"
-                      onClick={() => addItemToCart(item)}
-                      disabled={!item.isAvailable}
-                    >
-                      Add to Cart
-                    </button>
-                  </article>
-                ))}
-              </div>
-            </section>
-
-            <section>
-              <div className="sectionHeader">
-                <h3 className="subheading">Drinks</h3>
-                <span className="badge">{drinkItems.length}</span>
-              </div>
-              <div className="menuGrid">
-                {drinkItems.map((item) => (
-                  <article key={item.itemId} className="menuCard">
-                    <div className="rowHeader">
-                      <div>
-                        <h3 className="subheading">{item.name}</h3>
-                        <p className="muted mono">{item.itemId}</p>
-                      </div>
-                      <span className={item.isAvailable ? "chip chipAccepted" : "chip chipClosed"}>
-                        {item.isAvailable ? "Available" : "Unavailable"}
-                      </span>
-                    </div>
-                    <p className="menuPrice">{formatMenuMoney(item.priceMoney)}</p>
-                    <p className="rowBody">{item.description?.trim() || "No description provided."}</p>
-                    <div className="divider" />
-                    <button
-                      type="button"
-                      className="btn btnPrimary"
-                      onClick={() => addItemToCart(item)}
-                      disabled={!item.isAvailable}
-                    >
-                      Add to Cart
-                    </button>
-                  </article>
-                ))}
-              </div>
-            </section>
+            <MenuCategorySection title="Food" sections={foodSections} onAddItem={addItemToCart} />
+            <MenuCategorySection title="Drinks" sections={drinkSections} onAddItem={addItemToCart} />
           </div>
         </section>
 
@@ -628,12 +928,16 @@ export function MenuPage() {
             <div className="cardHeader">
               <div>
                 <h2 className="sectionTitle">Cart</h2>
-                <p className="hint">Each cart line keeps its own quantity, notes, and item-specific modifiers.</p>
+                <p className="hint">
+                  Each line keeps its own quantity, notes, and item-specific modifiers.
+                </p>
               </div>
               <span className="badge">{cart.length} lines</span>
             </div>
             <div className="cardBody">
-              {cart.length === 0 ? <div className="emptyState">Add food or drinks to start an order.</div> : null}
+              {cart.length === 0 ? (
+                <div className="emptyState">Add food or drinks to start an order.</div>
+              ) : null}
 
               <div className="listStack">
                 {cart.map((line) => (
@@ -641,7 +945,9 @@ export function MenuPage() {
                     <div className="rowHeader">
                       <div>
                         <div className="rowTitle">{line.item.name}</div>
-                        <p className="muted mono">{line.item.itemId}</p>
+                        <p className="muted mono">
+                          {categoryById.get(line.item.categoryId ?? "")?.name ?? line.item.itemId}
+                        </p>
                       </div>
                       <span className="badge">{formatMenuMoney(line.item.priceMoney)}</span>
                     </div>
@@ -783,9 +1089,22 @@ export function MenuPage() {
                 type="button"
                 className="btn btnPrimary"
                 onClick={() => void submitOrder()}
-                disabled={placingOrder || cart.length === 0}
+                disabled={
+                  placingOrder ||
+                  cart.length === 0 ||
+                  !activeContext.orderable ||
+                  !activeContext.locationId
+                }
               >
-                {placingOrder ? "Placing Order..." : "Place Order"}
+                {placingOrder
+                  ? "Placing Order..."
+                  : `Place ${
+                      activeContext.mode === "DINE_IN"
+                        ? "Dine-In"
+                        : activeContext.mode === "ONLINE_PICKUP"
+                          ? "Pickup"
+                          : "Delivery"
+                    } Order`}
               </button>
             </div>
           </section>
@@ -793,17 +1112,25 @@ export function MenuPage() {
           <section className="card">
             <div className="cardHeader">
               <div>
-                <h2 className="sectionTitle">My Table Orders</h2>
+                <h2 className="sectionTitle">Recent orders</h2>
                 <p className="hint">
-                  Hydrated from REST for <span className="mono">{tableId}</span>, then kept current from websocket events.
+                  {activeContext.tableId
+                    ? `Hydrated from the live table history for ${activeContext.tableId}.`
+                    : "Off-premise history listing is not exposed as a generic endpoint yet."}
                 </p>
               </div>
               <span className="badge">{orderedTableOrders.length} orders</span>
             </div>
             <div className="cardBody">
+              {!activeContext.tableId ? (
+                <div className="infoBox">
+                  This surface can place pickup and delivery orders through the new location-aware
+                  API, but the current backend only exposes list history for table-backed locations.
+                </div>
+              ) : null}
               {ordersLoading ? <div className="infoBox">Loading orders...</div> : null}
               {ordersError ? <div className="errorBox">{ordersError}</div> : null}
-              {!ordersLoading && orderedTableOrders.length === 0 ? (
+              {activeContext.tableId && !ordersLoading && orderedTableOrders.length === 0 ? (
                 <div className="emptyState">No orders yet for this table.</div>
               ) : null}
 

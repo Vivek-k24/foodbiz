@@ -3,6 +3,7 @@ import type {
   ApiError,
   ApiErrorResponse,
   KitchenQueueResponse,
+  LocationsResponse,
   OrderAction,
   OrderPayload,
   TableOrdersResponse,
@@ -46,15 +47,21 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+export async function fetchLocations(): Promise<LocationsResponse> {
+  return fetchJson<LocationsResponse>(
+    `${apiBaseUrl}/v1/restaurants/${restaurantId}/locations?is_active=true`
+  );
+}
+
 export async function fetchTableRegistry(): Promise<TableRegistryResponse> {
   const url = `${apiBaseUrl}/v1/restaurants/${restaurantId}/tables?status=ALL&limit=200`;
   return fetchJson<TableRegistryResponse>(url);
 }
 
-export async function fetchKitchenOrders(): Promise<OrderPayload[]> {
-  const statuses = ["PLACED", "ACCEPTED", "READY", "SERVED"] as const;
+export async function fetchKitchenOrders(statuses?: readonly string[]): Promise<OrderPayload[]> {
+  const requestedStatuses = statuses ?? (["PLACED", "ACCEPTED", "READY"] as const);
   const payloads = await Promise.all(
-    statuses.map((status) =>
+    requestedStatuses.map((status) =>
       fetchJson<KitchenQueueResponse>(
         `${apiBaseUrl}/v1/restaurants/${restaurantId}/kitchen/orders?status=${status}&limit=50`
       )
@@ -92,7 +99,7 @@ export async function closeLocation(tableId: string): Promise<void> {
   );
 }
 
-export async function advanceOrder(orderId: string, action: OrderAction): Promise<OrderPayload> {
+export async function advanceOrder(orderId: string, action: OrderAction | "accept" | "ready"): Promise<OrderPayload> {
   return normalizeOrder(
     await fetchJson<OrderPayload>(`${apiBaseUrl}/v1/orders/${encodeURIComponent(orderId)}/${action}`, {
       method: "POST",
@@ -104,5 +111,12 @@ export function buildStaffConsoleWsUrl(): string {
   const url = new URL("/ws", wsBaseUrl);
   url.searchParams.set("restaurant_id", restaurantId);
   url.searchParams.set("role", "STAFF_CONSOLE");
+  return url.toString();
+}
+
+export function buildKitchenDisplayWsUrl(): string {
+  const url = new URL("/ws", wsBaseUrl);
+  url.searchParams.set("restaurant_id", restaurantId);
+  url.searchParams.set("role", "KITCHEN_DISPLAY");
   return url.toString();
 }

@@ -40,10 +40,12 @@ export function locationTypeClass(type: LocationType): string {
   switch (type) {
     case "TABLE":
       return "badge badgeTypeTable";
-    case "KIOSK_TABLE":
-      return "badge badgeTypeKiosk";
     case "BAR_SEAT":
       return "badge badgeTypeBar";
+    case "ONLINE_PICKUP":
+      return "badge badgeTypePickup";
+    case "ONLINE_DELIVERY":
+      return "badge badgeTypeDelivery";
     default:
       return "badge";
   }
