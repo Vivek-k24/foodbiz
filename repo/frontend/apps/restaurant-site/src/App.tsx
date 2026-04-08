@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { buildOrderingHref } from "./lib/routing";
+
 type Restaurant = {
   restaurantId: string;
   name: string;
@@ -49,11 +51,11 @@ function App() {
     <main className="siteRoot">
       <section className="hero card">
         <div>
-          <p className="eyebrow">Public Restaurant Surface</p>
+          <p className="eyebrow">FoodBiz Restaurant</p>
           <h1 className="title">{restaurant?.name ?? "FoodBiz Restaurant"}</h1>
           <p className="subtitle">
-            Lightweight public shell for the restaurant website boundary. Ordering remains its own
-            browser surface, while staff and kitchen stay operationally separate.
+            Fresh kitchen service, casual hospitality, and a clear path to order online for pickup
+            or delivery.
           </p>
           {error ? <div className="infoBox">Live restaurant metadata is unavailable: {error}</div> : null}
         </div>
@@ -67,46 +69,46 @@ function App() {
             <strong>{restaurant?.currency ?? "USD"}</strong>
           </div>
           <div className="metaCard">
-            <span className="label">Surface status</span>
-            <strong>Boundary shell</strong>
+            <span className="label">Cuisine</span>
+            <strong>Italian, Greek, French, Mexican, Western</strong>
           </div>
         </div>
       </section>
 
       <section className="grid">
         <article className="card panel">
-          <p className="eyebrow">About</p>
-          <h2 className="sectionTitle">Public-facing homepage shell</h2>
+          <p className="eyebrow">Welcome</p>
+          <h2 className="sectionTitle">A customer-facing restaurant website</h2>
           <p className="bodyText">
-            This app establishes the product boundary for the eventual restaurant website. It should
-            hold branding, business information, and public calls to action, not staff or kitchen workflows.
+            Explore the menu, plan a pickup, or place a delivery order without touching any internal
+            staff or kitchen workflows.
           </p>
         </article>
 
         <article className="card panel">
           <p className="eyebrow">Order online</p>
-          <h2 className="sectionTitle">Customer ordering entry points</h2>
+          <h2 className="sectionTitle">Choose how you want to order</h2>
           <div className="buttonGroup">
-            <a className="primaryButton" href={`${webOrderingBaseUrl}?mode=pickup`}>
-              Start pickup order
+            <a className="primaryButton" href={buildOrderingHref(webOrderingBaseUrl, "pickup")}>
+              Order Pickup
             </a>
-            <a className="secondaryButton" href={`${webOrderingBaseUrl}?mode=delivery`}>
-              Start delivery order
+            <a className="secondaryButton" href={buildOrderingHref(webOrderingBaseUrl, "delivery")}>
+              Order Delivery
             </a>
           </div>
           <p className="bodyText">
-            Dine-in scan links should point to the same web-ordering app with table or location context.
+            Dining-room QR codes should land in the same ordering flow with table context already attached.
           </p>
         </article>
 
         <article className="card panel">
-          <p className="eyebrow">Deferred</p>
-          <h2 className="sectionTitle">What is intentionally not here yet</h2>
+          <p className="eyebrow">Visit</p>
+          <h2 className="sectionTitle">Simple public details</h2>
           <ul className="list">
-            <li>Marketing-heavy branding and hero content</li>
-            <li>Hours, address, and specials management</li>
-            <li>Reservation or CRM workflows</li>
-            <li>Any staff, kitchen, or operational controls</li>
+            <li>123 Service Lane, Chicago, IL</li>
+            <li>Open daily, 11:00 AM to 10:00 PM</li>
+            <li>Call (555) 010-0140 for group dining or large pickup orders</li>
+            <li>Internal staff and kitchen tools stay on separate browser surfaces</li>
           </ul>
         </article>
       </section>

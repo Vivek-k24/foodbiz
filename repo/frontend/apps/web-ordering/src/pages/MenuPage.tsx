@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 
+import {
+  buildMenuSections,
+  buildUrlForState,
+  locationIdFromTableId,
+  normalizeTableId,
+  orderSourceForMode,
+  readUrlStateFromHref,
+  resolveActiveContext,
+  type ActiveOrderingContext,
+  type EntryMode,
+  type OrderingUrlState,
+} from "../lib/ordering";
+
 type Money = {
   amountCents: number;
   currency: string;
@@ -112,26 +125,6 @@ type CartLine = {
   modifierValues: Record<string, string>;
 };
 
-type EntryMode = "DINE_IN" | "ONLINE_PICKUP" | "ONLINE_DELIVERY";
-
-type OrderingUrlState = {
-  mode: EntryMode | null;
-  tableId: string | null;
-  locationId: string | null;
-};
-
-type ActiveContext = {
-  mode: EntryMode;
-  locationId: string | null;
-  tableId: string | null;
-  sessionId: string | null;
-  label: string;
-  subtitle: string;
-  scanSource: boolean;
-  orderable: boolean;
-  orderableMessage: string;
-};
-
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
 const restaurantId = "rst_001";
@@ -140,79 +133,14 @@ function readInitialUrlState(): OrderingUrlState {
   if (typeof window === "undefined") {
     return { mode: "ONLINE_PICKUP", tableId: null, locationId: null };
   }
-  const params = new URL(window.location.href).searchParams;
-  const rawMode = params.get("mode")?.toLowerCase();
-  const mode =
-    rawMode === "pickup"
-      ? "ONLINE_PICKUP"
-      : rawMode === "delivery"
-        ? "ONLINE_DELIVERY"
-        : rawMode === "dine-in"
-          ? "DINE_IN"
-          : null;
-  const rawTableId = params.get("tableId");
-  const rawLocationId = params.get("locationId");
-  return {
-    mode,
-    tableId: rawTableId?.trim() || null,
-    locationId: rawLocationId?.trim() || null,
-  };
+  return readUrlStateFromHref(window.location.href);
 }
 
 function applyUrlState(state: OrderingUrlState): void {
   if (typeof window === "undefined") {
     return;
   }
-  const url = new URL(window.location.href);
-  url.searchParams.delete("mode");
-  url.searchParams.delete("tableId");
-  url.searchParams.delete("locationId");
-
-  if (state.mode === "ONLINE_PICKUP") {
-    url.searchParams.set("mode", "pickup");
-  }
-  if (state.mode === "ONLINE_DELIVERY") {
-    url.searchParams.set("mode", "delivery");
-  }
-  if (state.mode === "DINE_IN") {
-    url.searchParams.set("mode", "dine-in");
-  }
-  if (state.tableId) {
-    url.searchParams.set("tableId", state.tableId);
-  }
-  if (state.locationId) {
-    url.searchParams.set("locationId", state.locationId);
-  }
-
-  window.history.replaceState(null, "", url.toString());
-}
-
-function normalizeTableId(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.startsWith("loc_tbl_")) {
-    return trimmed.replace(/^loc_/, "");
-  }
-  return trimmed;
-}
-
-function locationIdFromTableId(tableId: string | null): string | null {
-  if (!tableId) {
-    return null;
-  }
-  const trimmed = tableId.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.startsWith("loc_tbl_")) {
-    return trimmed;
-  }
-  return `loc_${trimmed}`;
+  window.history.replaceState(null, "", buildUrlForState(window.location.href, state));
 }
 
 function buildIdempotencyKey(context: ActiveContext): string {
@@ -405,78 +333,16 @@ export function MenuPage() {
     [resolvedTableId, urlState.locationId]
   );
 
-  const scanLocation = useMemo(() => {
-    if (!resolvedLocationId) {
-      return null;
-    }
-    return locations.find((location) => location.locationId === resolvedLocationId) ?? null;
-  }, [locations, resolvedLocationId]);
-
-  const pickupLocation = useMemo(
-    () => locations.find((location) => location.locationId === "loc_online_pickup") ?? null,
-    [locations]
-  );
-  const deliveryLocation = useMemo(
-    () => locations.find((location) => location.locationId === "loc_online_delivery") ?? null,
-    [locations]
+  const activeContext = useMemo<ActiveOrderingContext>(
+    () => resolveActiveContext(urlState, locations),
+    [locations, urlState]
   );
 
-  const activeContext = useMemo<ActiveContext>(() => {
-    if (scanLocation && (urlState.mode === null || urlState.mode === "DINE_IN")) {
-      const tableId =
-        normalizeTableId(urlState.tableId) ?? scanLocation.locationId.replace(/^loc_/, "");
-      const orderable = scanLocation.sessionStatus === "OPEN" && !!scanLocation.activeSessionId;
-      return {
-        mode: "DINE_IN",
-        locationId: scanLocation.locationId,
-        tableId,
-        sessionId: scanLocation.activeSessionId,
-        label: scanLocation.displayLabel,
-        subtitle: orderable
-          ? `Dine-in ordering is attached to the open session for ${scanLocation.displayLabel}.`
-          : `This scan-aware table exists, but staff has not opened the dining session yet.`,
-        scanSource: true,
-        orderable,
-        orderableMessage: orderable
-          ? "Ready to order."
-          : "Ask staff to open the table session before ordering.",
-      };
-    }
-
-    if (urlState.mode === "ONLINE_DELIVERY") {
-      return {
-        mode: "ONLINE_DELIVERY",
-        locationId: deliveryLocation?.locationId ?? null,
-        tableId: null,
-        sessionId: null,
-        label: deliveryLocation?.displayLabel ?? "Online Delivery",
-        subtitle:
-          "Delivery ordering uses an off-premise location context instead of a dining session.",
-        scanSource: false,
-        orderable: deliveryLocation !== null,
-        orderableMessage: deliveryLocation
-          ? "Delivery orders are enabled."
-          : "Delivery location is unavailable.",
-      };
-    }
-
-    return {
-      mode: "ONLINE_PICKUP",
-      locationId: pickupLocation?.locationId ?? null,
-      tableId: null,
-      sessionId: null,
-      label: pickupLocation?.displayLabel ?? "Online Pickup",
-      subtitle:
-        "Pickup ordering stays customer-facing and separate from internal staff workflows.",
-      scanSource: false,
-      orderable: pickupLocation !== null,
-      orderableMessage: pickupLocation
-        ? "Pickup orders are enabled."
-        : "Pickup location is unavailable.",
-    };
-  }, [deliveryLocation, pickupLocation, scanLocation, urlState.mode, urlState.tableId]);
-
-  const canUseDineInMode = scanLocation?.type === "TABLE";
+  const canUseDineInMode =
+    !!resolvedLocationId &&
+    locations.some(
+      (location) => location.locationId === resolvedLocationId && location.type === "TABLE"
+    );
 
   const menuEndpoint = useMemo(() => `${apiBaseUrl}/v1/restaurants/${restaurantId}/menu`, []);
   const locationsEndpoint = useMemo(
@@ -665,7 +531,7 @@ export function MenuPage() {
           locationId: activeContext.locationId,
           sessionId: activeContext.sessionId,
           tableId: activeContext.tableId,
-          source: activeContext.mode,
+          source: orderSourceForMode(activeContext.mode),
           lines: cart.map((line) => ({
             itemId: line.item.itemId,
             quantity: line.quantity,
@@ -727,29 +593,9 @@ export function MenuPage() {
     [menu]
   );
 
-  const foodSections = useMemo(
-    () =>
-      (menu?.categories ?? [])
-        .filter((category) => category.categoryKind === "FOOD")
-        .map((category) => ({
-          category,
-          items: (menu?.items ?? []).filter((item) => item.categoryId === category.categoryId),
-        }))
-        .filter((section) => section.items.length > 0),
-    [menu]
-  );
+  const foodSections = useMemo(() => buildMenuSections(menu, "FOOD"), [menu]);
 
-  const drinkSections = useMemo(
-    () =>
-      (menu?.categories ?? [])
-        .filter((category) => category.categoryKind === "DRINK")
-        .map((category) => ({
-          category,
-          items: (menu?.items ?? []).filter((item) => item.categoryId === category.categoryId),
-        }))
-        .filter((section) => section.items.length > 0),
-    [menu]
-  );
+  const drinkSections = useMemo(() => buildMenuSections(menu, "DRINK"), [menu]);
 
   const orderedTableOrders = useMemo(
     () =>
