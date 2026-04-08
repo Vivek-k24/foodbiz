@@ -4,10 +4,25 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
-from rop.domain.common.ids import MenuId, MenuItemId, RestaurantId
+from rop.domain.common.ids import CategoryId, MenuId, MenuItemId, RestaurantId
 from rop.domain.common.money import Money
 
 ModifierKind = Literal["toggle", "choice", "text"]
+CategoryKind = Literal["FOOD", "DRINK"]
+
+
+@dataclass(frozen=True)
+class MenuCategory:
+    category_id: CategoryId
+    name: str
+    category_kind: CategoryKind
+    cuisine_or_family: str
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("category name must be non-empty")
+        if not self.cuisine_or_family.strip():
+            raise ValueError("cuisine_or_family must be non-empty")
 
 
 @dataclass(frozen=True)
@@ -46,7 +61,7 @@ class Menu:
     menu_id: MenuId
     restaurant_id: RestaurantId
     version: int
-    categories: list[str] = field(default_factory=list)
+    categories: list[MenuCategory] = field(default_factory=list)
     items: list[MenuItem] = field(default_factory=list)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

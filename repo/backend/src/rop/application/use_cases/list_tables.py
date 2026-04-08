@@ -83,6 +83,8 @@ class ListTables:
                         placed=row.summary.placed,
                         accepted=row.summary.accepted,
                         ready=row.summary.ready,
+                        served=row.summary.served,
+                        settled=row.summary.settled,
                     ),
                 )
                 for row in rows

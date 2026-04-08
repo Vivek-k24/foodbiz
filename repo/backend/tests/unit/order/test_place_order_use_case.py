@@ -55,6 +55,9 @@ class FakeTableRepository:
     def restaurant_exists(self, restaurant_id: RestaurantId) -> bool:
         return True
 
+    def get_active_session_id(self, table_id: TableId, restaurant_id: RestaurantId):
+        return None
+
     def list_for_restaurant(self, restaurant_id, status, limit, cursor):
         return [], None
 
@@ -162,6 +165,12 @@ class FakeOrderRepository:
             currency="USD",
             last_order_at=None,
         )
+
+    def append_event(self, event: object) -> None:
+        return None
+
+    def list_events(self, restaurant_id: RestaurantId, order_id=None):
+        return []
 
 
 @dataclass

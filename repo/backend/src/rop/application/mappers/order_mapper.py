@@ -10,10 +10,17 @@ from rop.domain.order.entities import Order
 
 
 def to_order_response(order: Order) -> OrderResponse:
+    location_id = order.location_id
+    updated_at = order.updated_at
+    assert location_id is not None
+    assert updated_at is not None
     return OrderResponse(
         orderId=str(order.order_id),
         restaurantId=str(order.restaurant_id),
-        tableId=str(order.table_id),
+        locationId=str(location_id),
+        tableId=str(order.table_id) if order.table_id is not None else None,
+        sessionId=str(order.session_id) if order.session_id is not None else None,
+        source=order.source.value,
         status=order.status.value,
         lines=[
             OrderLineResponse(
@@ -47,4 +54,5 @@ def to_order_response(order: Order) -> OrderResponse:
             currency=order.total.currency,
         ),
         createdAt=order.created_at,
+        updatedAt=updated_at,
     )

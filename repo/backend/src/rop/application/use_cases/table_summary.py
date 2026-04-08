@@ -45,6 +45,8 @@ class GetTableSummary:
                 placed=summary.placed,
                 accepted=summary.accepted,
                 ready=summary.ready,
+                served=summary.served,
+                settled=summary.settled,
             ),
             lastOrderAt=summary.last_order_at,
         )

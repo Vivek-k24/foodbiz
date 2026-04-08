@@ -20,14 +20,14 @@ def test_table_orders_and_close_workflow() -> None:
 
         place_response = client.post(
             f"/v1/restaurants/rst_001/tables/{table_id}/orders",
-            json={"lines": [{"itemId": "itm_001", "quantity": 1}]},
+            json={"lines": [{"itemId": "itm_010", "quantity": 1}]},
         )
         assert place_response.status_code == 201
         order_id_one = place_response.json()["orderId"]
 
         second_place_response = client.post(
             f"/v1/restaurants/rst_001/tables/{table_id}/orders",
-            json={"lines": [{"itemId": "itm_001", "quantity": 1}]},
+            json={"lines": [{"itemId": "itm_010", "quantity": 1}]},
         )
         assert second_place_response.status_code == 201
         order_id_two = second_place_response.json()["orderId"]

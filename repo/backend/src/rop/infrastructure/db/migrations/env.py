@@ -6,11 +6,14 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from rop.infrastructure.db.models import location as location_models
 from rop.infrastructure.db.models import order as order_models
+from rop.infrastructure.db.models import role as role_models
+from rop.infrastructure.db.models import session_record as session_models
 from rop.infrastructure.db.models import table as table_models
 from rop.infrastructure.db.models.menu import Base
 
-_ = (order_models, table_models)
+_ = (location_models, order_models, role_models, session_models, table_models)
 
 config = context.config
 

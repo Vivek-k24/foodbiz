@@ -21,12 +21,13 @@ def test_menu_endpoint_uses_cache_after_first_read(monkeypatch) -> None:
     payload = first_response.json()
     assert payload["restaurantId"] == "rst_001"
     assert payload["menuVersion"] == 1
-    assert len(payload["items"]) == 25
-    margherita = next(item for item in payload["items"] if item["itemId"] == "itm_001")
+    assert len(payload["categories"]) == 10
+    assert len(payload["items"]) == 26
+    margherita = next(item for item in payload["items"] if item["itemId"] == "itm_010")
     assert margherita["name"] == "Margherita Pizza"
-    assert len(margherita["allowedModifiers"]) == 3
-    still_water = next(item for item in payload["items"] if item["itemId"] == "drink_007")
-    assert still_water["allowedModifiers"] is None
+    assert len(margherita["allowedModifiers"]) == 2
+    house_red = next(item for item in payload["items"] if item["itemId"] == "itm_018")
+    assert house_red["allowedModifiers"] is None
 
     def _raise_if_called(*args, **kwargs):
         raise RuntimeError("database should not be called on warm cache")

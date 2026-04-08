@@ -17,6 +17,13 @@ class AllowedModifierResponse(BaseModel):
     options: list[str] | None = None
 
 
+class MenuCategoryResponse(BaseModel):
+    categoryId: str
+    name: str
+    categoryKind: str
+    cuisineOrFamily: str
+
+
 class MenuItemResponse(BaseModel):
     itemId: str
     name: str
@@ -31,7 +38,7 @@ class MenuResponse(BaseModel):
     menuId: str
     restaurantId: str
     menuVersion: int
-    categories: list[str] = Field(default_factory=list)
+    categories: list[MenuCategoryResponse] = Field(default_factory=list)
     items: list[MenuItemResponse] = Field(default_factory=list)
     updatedAt: datetime
 
@@ -56,11 +63,28 @@ class OrderLineResponse(BaseModel):
 class OrderResponse(BaseModel):
     orderId: str
     restaurantId: str
-    tableId: str
+    locationId: str
+    tableId: str | None = None
+    sessionId: str | None = None
+    source: str
     status: str
     lines: list[OrderLineResponse] = Field(default_factory=list)
     total: MoneyResponse
     createdAt: datetime
+    updatedAt: datetime
+
+
+class OrderEventResponse(BaseModel):
+    eventId: str
+    orderId: str
+    restaurantId: str
+    locationId: str
+    sessionId: str | None = None
+    eventType: str
+    orderStatusAfter: str
+    triggeredBySource: str
+    createdAt: datetime
+    metadata: dict[str, object] | None = None
 
 
 class TableResponse(BaseModel):
@@ -86,6 +110,8 @@ class TableSummaryCountsResponse(BaseModel):
     placed: int
     accepted: int
     ready: int
+    served: int
+    settled: int
 
 
 class TableSummaryResponse(BaseModel):
@@ -113,3 +139,68 @@ class TableRegistryItemResponse(BaseModel):
 class TableRegistryResponse(BaseModel):
     tables: list[TableRegistryItemResponse] = Field(default_factory=list)
     nextCursor: str | None = None
+
+
+class RestaurantResponse(BaseModel):
+    restaurantId: str
+    name: str
+    timezone: str
+    currency: str
+    createdAt: datetime
+
+
+class RestaurantsResponse(BaseModel):
+    restaurants: list[RestaurantResponse] = Field(default_factory=list)
+
+
+class LocationResponse(BaseModel):
+    locationId: str
+    restaurantId: str
+    type: str
+    name: str
+    displayLabel: str
+    capacity: int | None = None
+    zone: str | None = None
+    isActive: bool
+    createdAt: datetime
+    sessionStatus: str | None = None
+    activeSessionId: str | None = None
+    lastSessionOpenedAt: datetime | None = None
+
+
+class LocationsResponse(BaseModel):
+    locations: list[LocationResponse] = Field(default_factory=list)
+
+
+class SessionResponse(BaseModel):
+    sessionId: str
+    restaurantId: str
+    locationId: str
+    status: str
+    openedAt: datetime
+    closedAt: datetime | None = None
+    openedByRoleId: str | None = None
+    openedBySource: str | None = None
+    notes: str | None = None
+
+
+class SessionsResponse(BaseModel):
+    sessions: list[SessionResponse] = Field(default_factory=list)
+
+
+class RoleResponse(BaseModel):
+    roleId: str
+    code: str
+    displayName: str
+    roleGroup: str
+    createdAt: datetime
+
+
+class RolesResponse(BaseModel):
+    roles: list[RoleResponse] = Field(default_factory=list)
+
+
+class InventoryStubResponse(BaseModel):
+    status: str
+    message: str
+    implemented: bool

@@ -40,7 +40,7 @@ def test_websocket_receives_order_transition_events() -> None:
                 json={
                     "lines": [
                         {
-                            "itemId": "itm_001",
+                            "itemId": "itm_010",
                             "quantity": 1,
                             "notes": "share plates",
                             "modifiers": [

@@ -14,6 +14,30 @@ from rop.application.use_cases.accept_order import (
 from rop.application.use_cases.accept_order import OrderConflictError as AcceptOrderConflictError
 from rop.application.use_cases.accept_order import OrderNotFoundError as AcceptOrderNotFoundError
 from rop.application.use_cases.close_table import TableCloseBlockedError, TableNotOpenForCloseError
+from rop.application.use_cases.create_order import (
+    IdempotencyReplayMismatchError as CreateOrderIdempotencyReplayMismatchError,
+)
+from rop.application.use_cases.create_order import (
+    InvalidModifierError as CreateOrderInvalidModifierError,
+)
+from rop.application.use_cases.create_order import (
+    InvalidModifierValueError as CreateOrderInvalidModifierValueError,
+)
+from rop.application.use_cases.create_order import (
+    InvalidOrderSourceError as CreateOrderInvalidOrderSourceError,
+)
+from rop.application.use_cases.create_order import (
+    LocationNotFoundError as CreateOrderLocationNotFoundError,
+)
+from rop.application.use_cases.create_order import (
+    MenuItemUnavailableError as CreateOrderMenuItemUnavailableError,
+)
+from rop.application.use_cases.create_order import (
+    MenuNotFoundError as CreateOrderMenuNotFoundError,
+)
+from rop.application.use_cases.create_order import (
+    SessionRequiredError as CreateOrderSessionRequiredError,
+)
 from rop.application.use_cases.get_menu import MenuNotFoundError as GetMenuNotFoundError
 from rop.application.use_cases.get_order import OrderNotFoundError as GetOrderNotFoundError
 from rop.application.use_cases.kitchen_queue import (
@@ -25,6 +49,7 @@ from rop.application.use_cases.list_tables import (
     InvalidTableRegistryStatusError,
     RestaurantNotFoundError,
 )
+from rop.application.use_cases.locations import InvalidLocationFilterError
 from rop.application.use_cases.mark_order_ready import (
     InvalidOrderTransitionError as ReadyInvalidOrderTransitionError,
 )
@@ -55,6 +80,7 @@ from rop.application.use_cases.place_order import (
     IdempotencyReplayMismatchError,
     InvalidModifierError,
     InvalidModifierValueError,
+    InvalidOrderSourceError,
     MenuItemUnavailableError,
     TableNotOpenError,
 )
@@ -63,6 +89,13 @@ from rop.application.use_cases.place_order import (
 )
 from rop.application.use_cases.place_order import (
     TableNotFoundError as PlaceOrderTableNotFoundError,
+)
+from rop.application.use_cases.sessions import (
+    InvalidSessionFilterError,
+    SessionNotFoundError,
+)
+from rop.application.use_cases.sessions import (
+    LocationNotFoundError as SessionLocationNotFoundError,
 )
 from rop.application.use_cases.table_orders import (
     InvalidTableOrdersCursorError,
@@ -134,21 +167,36 @@ def register_exception_handlers(app: FastAPI) -> None:
     mappings: list[tuple[type[Exception], int, str]] = [
         (GetMenuNotFoundError, 404, "MENU_NOT_FOUND"),
         (PlaceOrderMenuNotFoundError, 404, "MENU_NOT_FOUND"),
+        (CreateOrderMenuNotFoundError, 404, "MENU_NOT_FOUND"),
         (GetOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (AcceptOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (ReadyOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (ServedOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (SettledOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
+        (CreateOrderLocationNotFoundError, 404, "LOCATION_NOT_FOUND"),
+        (SessionLocationNotFoundError, 404, "LOCATION_NOT_FOUND"),
+        (SessionNotFoundError, 404, "SESSION_NOT_FOUND"),
         (GetTableNotFoundError, 404, "TABLE_NOT_FOUND"),
         (PlaceOrderTableNotFoundError, 404, "TABLE_NOT_FOUND"),
         (TableNotOpenError, 409, "TABLE_NOT_OPEN"),
         (TableNotOpenForCloseError, 409, "TABLE_NOT_OPEN"),
         (TableCloseBlockedError, 409, "TABLE_CLOSE_BLOCKED"),
         (MenuItemUnavailableError, 400, "MENU_ITEM_UNAVAILABLE"),
+        (CreateOrderMenuItemUnavailableError, 400, "MENU_ITEM_UNAVAILABLE"),
         (InvalidModifierError, 400, "INVALID_MODIFIER"),
+        (CreateOrderInvalidModifierError, 400, "INVALID_MODIFIER"),
         (InvalidModifierValueError, 400, "INVALID_MODIFIER_VALUE"),
+        (CreateOrderInvalidModifierValueError, 400, "INVALID_MODIFIER_VALUE"),
+        (InvalidOrderSourceError, 400, "INVALID_ORDER_SOURCE"),
+        (CreateOrderInvalidOrderSourceError, 400, "INVALID_ORDER_SOURCE"),
+        (CreateOrderSessionRequiredError, 409, "SESSION_REQUIRED"),
         (
             IdempotencyReplayMismatchError,
+            409,
+            "IDEMPOTENCY_KEY_REPLAY_DIFFERENT_PAYLOAD",
+        ),
+        (
+            CreateOrderIdempotencyReplayMismatchError,
             409,
             "IDEMPOTENCY_KEY_REPLAY_DIFFERENT_PAYLOAD",
         ),
@@ -183,6 +231,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         (RestaurantNotFoundError, 404, "RESTAURANT_NOT_FOUND"),
         (InvalidTableOrdersStatusError, 400, "INVALID_TABLE_ORDERS_STATUS"),
         (InvalidTableOrdersCursorError, 400, "INVALID_TABLE_ORDERS_CURSOR"),
+        (InvalidLocationFilterError, 400, "INVALID_LOCATION_FILTER"),
+        (InvalidSessionFilterError, 400, "INVALID_SESSION_FILTER"),
     ]
 
     for exc_cls, status_code, code in mappings:

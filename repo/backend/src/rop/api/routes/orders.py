@@ -4,14 +4,17 @@ from fastapi import APIRouter, Header, status
 from opentelemetry import trace
 
 from rop.api.middleware.request_id import get_request_id
-from rop.application.dto.requests import PlaceOrderRequest
+from rop.application.dto.requests import CreateOrderRequest, PlaceOrderRequest
 from rop.application.dto.responses import OrderResponse
 from rop.application.use_cases.context import TraceContext
+from rop.application.use_cases.create_order import CreateOrder
 from rop.application.use_cases.get_order import GetOrder
 from rop.application.use_cases.place_order import PlaceOrder
 from rop.domain.common.ids import OrderId, RestaurantId, TableId
+from rop.infrastructure.db.repositories.location_repo import SqlAlchemyLocationRepository
 from rop.infrastructure.db.repositories.menu_repo import SqlAlchemyMenuRepository
 from rop.infrastructure.db.repositories.order_repo import SqlAlchemyOrderRepository
+from rop.infrastructure.db.repositories.session_repo import SqlAlchemySessionRepository
 from rop.infrastructure.db.repositories.table_repo import SqlAlchemyTableRepository
 from rop.infrastructure.messaging.redis_publisher import RedisEventPublisher
 
@@ -36,6 +39,29 @@ def _place_order_use_case() -> PlaceOrder:
 
 def _get_order_use_case() -> GetOrder:
     return GetOrder(order_repository=SqlAlchemyOrderRepository())
+
+
+def _create_order_use_case() -> CreateOrder:
+    return CreateOrder(
+        menu_repository=SqlAlchemyMenuRepository(),
+        location_repository=SqlAlchemyLocationRepository(),
+        session_repository=SqlAlchemySessionRepository(),
+        order_repository=SqlAlchemyOrderRepository(),
+        publisher=RedisEventPublisher(),
+    )
+
+
+@router.post("/v1/orders", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
+def create_order(
+    request_dto: CreateOrderRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> OrderResponse:
+    normalized_key = idempotency_key.strip() if idempotency_key else None
+    return _create_order_use_case().execute(
+        request_dto=request_dto,
+        trace_ctx=TraceContext(trace_id=_current_trace_id(), request_id=get_request_id()),
+        idempotency_key=normalized_key,
+    )
 
 
 @router.post(

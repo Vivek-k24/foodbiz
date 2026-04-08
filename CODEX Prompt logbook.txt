@@ -3297,3 +3297,626 @@ Deliverables
 - Kitchen board color-coded by status with new action buttons
 - Tests updated and passing
 CODEX>>
+<<CODEX
+ROP-012 v1.0  
+
+Title
+GitHub Actions CI/CD + staging deployment only (no Azure, no production)
+
+Context
+We are continuing the FoodBiz monorepo exactly in its current architectural direction.
+
+Current confirmed state:
+- Menu is working.
+- Ordering flow is working.
+- Kitchen UI is partially done.
+- Payments are not implemented.
+- Auth has not been touched.
+- Project is still Docker-based on local machine.
+- We are NOT starting Azure now.
+- Remove Azure from current task scope entirely.
+- This ROP is for GitHub Actions and staging only.
+
+Repo direction already established:
+- Domain-first clean architecture.
+- FastAPI backend.
+- Frontend apps in monorepo.
+- Docker Compose for local/dev.
+- Observability stack already present locally.
+- Existing engineering style favors precise, versioned, acceptance-driven implementation.
+- Do not redesign the repo. Extend it carefully.
+
+Primary Goal
+Implement a professional-grade GitHub Actions pipeline for this monorepo that:
+1. validates code quality on pull requests,
+2. builds deployable Docker images,
+3. publishes versioned images to a registry,
+4. deploys to a single staging environment only,
+5. runs post-deploy smoke checks,
+6. keeps the system simple, reproducible, and production-minded,
+7. does not introduce Azure, Kubernetes, Terraform, or production deployment.
+
+Deployment Model (explicit)
+Use this exact staging model unless the repository already contains a better equivalent:
+- CI/CD platform: GitHub Actions
+- Image registry: GitHub Container Registry (GHCR)
+- Staging runtime: one Linux Docker host reachable by SSH
+- Deployment style: pull new images + restart services with a staging Docker Compose file
+- Reverse proxy / DNS is out of scope unless already required by existing repo
+- No Kubernetes
+- No Azure
+- No cloud-specific IaC
+- No production environment
+
+Why this model
+We are still in the “credible engineering + portfolio quality” phase.
+The staging path should prove:
+- clean CI discipline,
+- artifact generation,
+- controlled deploys,
+- environment separation,
+- rollback readiness,
+without prematurely adding cloud complexity.
+
+What to Build
+
+A. GitHub Actions workflows
+Create a clean workflow layout under:
+- repo/.github/workflows/
+
+Implement these workflows:
+
+1. ci.yml
+Triggered on:
+- pull_request to main
+- push to feature branches and main
+
+Responsibilities:
+- detect backend/frontend changes if useful, but correctness matters more than premature optimization
+- backend lint
+- backend typecheck
+- backend unit tests
+- backend integration tests if feasible in Actions using service containers
+- dependency boundary enforcement (`make depcheck` or equivalent)
+- frontend install/build/lint/test if scripts exist
+- fail fast on structural issues
+- upload useful artifacts/logs on failure where appropriate
+
+2. release-staging.yml
+Triggered on:
+- push to main
+- manual workflow_dispatch
+
+Responsibilities:
+- require CI success first
+- build backend image
+- build relevant frontend image(s) if they are containerized in repo
+- tag images with:
+  - short SHA
+  - branch-safe tag where applicable
+  - stable `staging` tag
+- push to GHCR
+- deploy to staging host over SSH
+- run smoke tests after deployment
+- mark deployment success/failure clearly
+
+3. reusable workflow(s) if it improves quality
+Use reusable workflows only if they genuinely reduce duplication.
+Do not split into too many files.
+Prefer a small number of readable workflows over clever abstraction.
+
+B. Staging deployment assets
+Add/update staging deployment files under a clear path such as:
+- repo/infra/staging/
+or
+- repo/deploy/staging/
+
+Include:
+1. docker-compose.staging.yml
+2. .env.staging.example
+3. deployment script(s), for example:
+   - repo/scripts/deploy_staging.sh
+   - repo/scripts/smoke_staging.sh
+
+Staging Compose expectations:
+- use published GHCR images, not local builds
+- restart policy set appropriately
+- clearly named services
+- secrets/config pulled from environment variables
+- no hardcoded secrets
+- minimal required observability hooks retained if practical
+- health-aware startup where sensible
+
+C. Documentation
+Update:
+- repo/README.md
+
+Add a focused CI/CD + staging section covering:
+- workflow purpose
+- required GitHub secrets
+- required GitHub environment variables
+- staging deploy flow
+- rollback flow
+- how to trigger manual deploy
+- how to inspect failed runs
+- how to inspect staging container logs
+
+Also add:
+- repo/docs/staging.md
+with more operational detail if needed.
+
+GitHub Secrets and Environment Model
+Use GitHub Environments properly.
+
+Create support for:
+- environment: `staging`
+
+Assume these secrets/variables will be configured in GitHub, and code/workflows should reference them cleanly:
+- STAGING_HOST
+- STAGING_USER
+- STAGING_SSH_PRIVATE_KEY
+- STAGING_PORT (optional)
+- STAGING_APP_DIR
+- STAGING_ENV_FILE or environment-specific variables
+- GHCR username/token should rely on GitHub-native auth where possible
+
+If environment vars are non-secret, separate them from secrets cleanly.
+Do not place secrets in repo.
+Do not require copying raw secret values into workflow YAML.
+
+Branching and Deploy Rules
+Enforce the following behavior:
+- PRs run CI only
+- only `main` can deploy to staging
+- staging deploys must be serialized; never allow overlapping staging deployments
+- a newer staging deploy should cancel an older in-progress staging deploy if appropriate
+- manual re-run of staging deploy must remain possible
+
+Image and Build Rules
+Implement sane Docker build behavior:
+- use Docker Buildx if helpful
+- use layer caching if practical
+- pin action versions
+- do not leave the workflow on floating ecosystem behavior unnecessarily
+- prefer deterministic tags and explicit metadata
+- do not introduce bloated multi-arch complexity unless it is nearly free
+
+Minimum image tagging strategy:
+- ghcr.io/<owner>/foodbiz-backend:<short_sha>
+- ghcr.io/<owner>/foodbiz-backend:staging
+
+If frontend images exist:
+- same strategy for each relevant app
+
+If the frontend is not yet properly containerized:
+- do not fake it
+- only containerize what is already ready
+- document remaining gap cleanly
+
+Smoke Test Requirements
+Post-deploy smoke checks must be real, lightweight, and useful.
+
+At minimum verify staging endpoints relevant to the current repo state:
+- /health/live
+- /health/ready
+- /metrics (status check only)
+- one read path such as menu endpoint
+- optional one order flow smoke check only if it can be done safely and deterministically
+
+Do NOT create fake end-to-end tests that depend on unfinished payments/auth.
+Do NOT test unfinished features.
+Be honest to current implementation state.
+
+Suggested smoke scope:
+1. liveness returns 200
+2. readiness returns 200
+3. menu endpoint returns 200 for seeded restaurant
+4. optional create test order against seeded data if deterministic and safe
+5. capture deployment metadata in logs
+
+Rollback Requirements
+Implement a simple, real rollback mechanism.
+Not theoretical.
+
+Acceptable rollback options:
+- compose file references previous image tag manually
+- deploy script preserves previous image tag reference
+- manual workflow input can redeploy a chosen tag
+
+Need:
+- a documented rollback path
+- no complex release orchestration
+- no blue/green
+- no canary
+- just a reliable staging rollback
+
+Security and Safety Constraints
+This section is mandatory.
+
+1. No Azure.
+2. No Kubernetes.
+3. No production deployment.
+4. No auth implementation in this ROP.
+5. No payment implementation in this ROP.
+6. No rewriting architecture.
+7. No business-logic changes unrelated to pipeline/deploy support.
+8. No secrets committed to repo.
+9. Pin GitHub Actions versions.
+10. Use least-privilege permissions in workflows.
+11. Avoid shell footguns:
+   - `set -euo pipefail`
+   - quote variables
+   - avoid destructive commands without path certainty
+12. Keep staging deploy idempotent.
+13. If migration step is added, it must be explicit and safe.
+14. Do not assume root login on staging server.
+15. Do not assume Docker Swarm, Kubernetes, or Azure services exist.
+
+Database / Migration Rules
+Be conservative.
+
+If the backend already uses Alembic migrations, support a staging migration step.
+But:
+- migrations must run explicitly during deploy, not magically
+- failure in migrations must fail the deployment clearly
+- do not silently continue after migration failure
+- do not add destructive data reset logic
+- do not auto-seed staging in a dangerous way
+
+If seed data is required for smoke tests:
+- provide a clearly named, intentional staging-safe seed path
+- keep it deterministic
+- do not wipe real data
+
+Observability Requirements
+Treat deployability as an engineering feature.
+
+Need:
+- clear workflow step names
+- artifact/log retention where useful
+- deployment logs visible in GitHub Actions
+- smoke test logs visible in workflow output
+- application version visible in staging runtime if practical
+- include image tag / git SHA in deploy output
+- keep troubleshooting readable
+
+If there is already structured logging or metrics support in repo, preserve alignment.
+Do not invent a parallel observability model.
+
+Implementation Style
+You must code like a disciplined senior backend/platform engineer.
+
+That means:
+- minimal but clear files
+- explicit naming
+- small scripts
+- comments only where they add durable value
+- readable workflow YAML
+- clean separation between CI and CD
+- no giant bash blob embedded in YAML when a repo script is better
+- no placeholder nonsense
+- no “TODO: implement later” for critical path pieces
+- every added file must be intentional
+
+Failure Modes to Handle
+Design for these explicitly:
+1. lint/test failure
+2. GHCR auth/push failure
+3. SSH connection failure
+4. missing staging env var
+5. docker compose pull failure
+6. migration failure
+7. container failed to become healthy
+8. smoke test failure after deploy
+9. concurrent deploy attempt
+10. partial deploy where old services stopped but new failed
+
+Handle them with:
+- explicit exit codes
+- clear logs
+- fail-fast behavior
+- no silent success
+
+Acceptance Criteria
+This ROP is complete only if all of the following are true:
+
+1. A PR to main runs CI automatically.
+2. CI checks code quality for the monorepo in a meaningful way.
+3. A push to main can build and publish deployable image(s) to GHCR.
+4. A push to main can deploy to staging through GitHub Actions only.
+5. Staging deploy is serialized and environment-scoped.
+6. Required secrets are documented and not committed.
+7. Post-deploy smoke checks run automatically.
+8. Failure in deploy or smoke checks marks workflow failed.
+9. README/docs explain setup, deploy, and rollback.
+10. No Azure files, workflows, or assumptions are introduced.
+11. No production environment is introduced.
+12. Result feels like a serious engineer’s staging pipeline, not a tutorial toy.
+
+Expected Output Format
+Return:
+1. a concise implementation summary
+2. exact list of files created/updated
+3. full contents of each important new/changed file
+4. any commands the maintainer must run in GitHub/staging host
+5. short explanation of why each workflow/script exists
+
+Quality Bar
+This must look like work that belongs in a credible public portfolio.
+The result should make a real developer say:
+“this person understands CI/CD discipline, deployment safety, and staged system evolution.”
+
+Do not overbuild.
+Do not under-engineer.
+Build the smallest serious staging pipeline that respects the repo’s architecture and current maturity.
+CODEX>>
+<<CODEX
+ROP-012 v1.2
+
+Title
+Cross-platform CI/CD, environment, tooling, and future-client compatibility review for staging-only pipeline
+
+Context
+We are continuing the FoodBiz monorepo in its current direction.
+This is a review-and-correctness pass, not a product pivot.
+
+Confirmed project state:
+- Menu works.
+- Ordering works.
+- Kitchen UI is partially done.
+- Payments are not implemented.
+- Auth is not implemented.
+- Project is local Docker-first today.
+- We are staging-only.
+- No Azure.
+- No Kubernetes.
+- No production deployment.
+- Android/native table-ordering app is future scope, not current deliverable.
+
+Recent ROP-012 outcome:
+- GitHub Actions workflows were added at repository root `.github/workflows/`.
+- CI is running on GitHub.
+- Frontend build is passing.
+- Backend lint and typecheck were reviewed and iterated.
+- `httpx` has been narrowed to a pinned version because CI behavior indicated test-environment sensitivity.
+- We do NOT want a reckless dependency freeze across the entire backend unless it is justified by actual reproducibility or compatibility risk.
+
+Purpose of this ROP
+Read and review the repo and the newly added CI/CD/staging code so the system obeys real platform rules, compatibility expectations, and operational constraints across:
+1. GitHub Actions
+2. GitHub Environments / staging deployment model
+3. VS Code developer workflow
+4. Windows local development
+5. Python packaging and local virtual environment behavior
+6. Docker / Docker Compose / Buildx usage
+7. Linux staging-host assumptions
+8. Future Android client compatibility
+9. Future web/mobile client API-contract stability
+10. Cross-platform repository hygiene
+
+This is a compliance, portability, and engineering-discipline pass.
+Do not turn it into a broad rewrite.
+
+Primary Goal
+Produce the smallest serious set of corrections that makes the current repo and ROP-012 staging pipeline:
+- reproducible enough for CI,
+- safe enough for staging,
+- practical on Windows developer machines,
+- compatible with Linux deployment hosts,
+- friendly to future Android and mobile clients,
+- structurally honest for GitHub/VS Code tooling,
+- resistant to avoidable platform-specific breakage.
+
+Hard Scope Boundaries
+Do NOT:
+- introduce Azure
+- introduce Kubernetes
+- introduce production deployment
+- add auth
+- add payments
+- redesign the domain architecture
+- rewrite working features without evidence
+- freeze every dependency blindly
+- add mobile app implementation
+- add speculative platform abstractions that are not yet needed
+
+What to Review
+
+A. GitHub Actions compliance and correctness
+Review all workflow files under:
+- .github/workflows/ci.yml
+- .github/workflows/release-staging.yml
+
+Check for:
+1. valid workflow placement and naming
+2. valid trigger behavior
+3. no accidental recursive workflow behavior
+4. environment usage correctness
+5. branch/deploy guard correctness
+6. concurrency behavior correctness
+7. action version references
+8. shell behavior and failure handling
+9. artifact/log retention usefulness
+10. correctness of paths targeting the monorepo under `repo/`
+
+Specific review questions:
+- Are these workflows valid and realistic for GitHub-hosted runners?
+- Are there any known path, trigger, environment, or permission mistakes?
+- Are any actions references likely to be correct on GitHub but noisy or misleading in VS Code?
+- Are there missing diagnostic steps that would materially improve failure triage?
+- Are there any places where GitHub runner behavior could diverge from local Windows behavior in a damaging way?
+
+B. VS Code and local editor/tooling compatibility
+Assume the primary developer machine is Windows using:
+- PowerShell
+- Git Bash
+- VS Code
+- local Python install
+- local Docker Desktop
+- pnpm for frontend
+
+Review for:
+1. commands that assume Unix-only tooling without justification
+2. developer instructions that incorrectly rely on `make` in PowerShell
+3. workflow/documentation mismatch for Windows users
+4. false-positive-prone editor diagnostics vs actual GitHub behavior
+5. path conventions that may confuse Windows contributors
+6. newline / executable-bit / shell-script expectations that may break locally
+
+Need:
+- docs and scripts must be honest about which commands are GitHub-runner-only, Linux-host-only, Docker-host-only, or Windows-local
+- developer instructions should prefer Python-native or Docker-native verification where `make` is not available on Windows PowerShell
+
+C. Python dependency and packaging reproducibility
+Review:
+- repo/backend/pyproject.toml
+- editable install assumptions in CI
+- dependency strategy for runtime vs dev tools
+
+Need:
+1. identify which dependencies truly must be pinned now
+2. identify which can stay open-ended for current maturity
+3. explain reproducibility risks clearly
+4. prevent future “works locally, fails in CI” drift where practical
+5. do not over-constrain the project without evidence
+
+Specific instruction:
+- treat dependency pinning as a risk-based decision, not ideology
+- keep the current targeted `httpx` pin if justified
+- only pin additional packages if there is a concrete compatibility, typing, or test-runner reason
+- if recommending a lockfile or constraints file, keep it minimal and compatible with current repo maturity
+
+D. Docker / Compose / Buildx / Linux staging host compatibility
+Review:
+- Dockerfile assumptions
+- build/push workflow
+- staging compose file
+- shell scripts under `repo/scripts/`
+- env-file handling
+- runtime assumptions on a Linux host
+
+Need:
+1. ensure staging uses published images, not local builds
+2. ensure scripts are idempotent enough for repeated staging deploys
+3. ensure env handling is safe and explicit
+4. ensure the deploy path is realistic for a single Linux Docker host
+5. ensure Docker/Buildx usage is not overbuilt for current needs
+6. flag any command or script pattern that is brittle across host environments
+
+Check specifically for:
+- line endings or shell syntax likely to break on Linux host
+- assumptions about bash presence
+- assumptions about root access
+- assumptions about Docker Compose plugin availability
+- assumptions about Buildx behavior that are unnecessary or misleading
+- missing rollback or migration failure clarity
+
+E. API contract stability for future clients
+Review the backend surface from the perspective of:
+- current web ordering
+- current dashboard/kitchen UI
+- future Android table-ordering app
+- future online-ordering/mobile clients
+
+Need:
+1. identify any response-shape or status-code instability that would make future clients fragile
+2. identify whether current endpoints are sufficiently platform-neutral
+3. identify whether backend contracts are tied too closely to current frontend assumptions
+4. identify any pagination, cursor, websocket, or event payload behavior that should be normalized now before mobile clients appear
+5. preserve clean architecture boundaries
+
+Do not build the Android app.
+Instead, review whether the current backend and repo structure will support one cleanly later.
+
+Android-specific review lens:
+- future mobile app should be able to consume backend APIs cleanly
+- backend contracts should support layered, testable client architecture
+- avoid transport/payload inconsistencies that would complicate Android state management
+- future client modules should be able to evolve without backend churn
+
+F. Cross-platform documentation correctness
+Review:
+- repo/README.md
+- repo/docs/staging.md
+- any commands shown to maintainers
+
+Need:
+1. commands must identify where they are meant to run
+   - Windows PowerShell
+   - Git Bash
+   - GitHub runner
+   - Linux staging host
+   - Docker container
+2. instructions must not imply unsupported local tooling
+3. staging setup steps must be realistic and minimal
+4. rollback instructions must be real, not theoretical
+5. troubleshooting steps must be usable by a Windows-first developer
+
+How to Think
+Think like:
+- a senior backend/platform engineer,
+- a CI/CD reviewer,
+- a Windows/Linux cross-platform maintainer,
+- a future mobile-platform enabler,
+not like a tutorial generator.
+
+Prioritize:
+1. correctness
+2. reproducibility
+3. cross-platform honesty
+4. smallest serious fix set
+5. maintainability
+6. future client friendliness
+
+Do not optimize for cleverness.
+Do not optimize for excessive abstraction.
+Do not add complexity merely because a platform technically supports it.
+
+Failure Modes to Hunt
+Explicitly look for and address:
+- GitHub Actions path mistakes
+- workflow trigger mistakes
+- environment/secrets misuse
+- accidental branch/deploy rule bypass
+- CI-only dependency drift
+- VS Code false-positive confusion caused by otherwise valid workflow files
+- Windows PowerShell incompatibility in docs or commands
+- shell scripts that would fail on Linux host due to formatting or assumptions
+- Docker/Compose env-file or migration sequencing mistakes
+- test dependencies that drift under open-ended version ranges
+- API contract instability that will hurt Android or other future clients
+- hidden assumptions that backend and mobile/web clients share identical runtime behavior
+
+Expected Output Format
+Return:
+1. implementation review summary
+2. risk-ranked findings:
+   - Critical
+   - Important
+   - Nice-to-have
+3. exact files to change, with full paths
+4. exact code or text patches only where needed
+5. rationale for each change
+6. anything intentionally left unchanged, with reason
+7. a short “safe to merge” judgment for ROP-012 after fixes
+
+Quality Bar
+This review must make the repository feel like:
+- a serious public portfolio project,
+- a staging-capable system,
+- a Windows-friendly development setup,
+- a Linux-deployable backend,
+- a backend that can support future Android/mobile clients cleanly,
+without pretending to be more mature than it is.
+
+Non-negotiable constraints
+- No Azure
+- No production
+- No Kubernetes
+- No fake mobile implementation
+- No dependency freeze without evidence
+- No broad architecture rewrite
+- No pretending VS Code extension noise is the same as GitHub runtime truth
+- No Windows-hostile maintainer workflow
+- No changes that make current Docker-first local development harder
+CODEX>>
