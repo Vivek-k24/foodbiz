@@ -7,10 +7,17 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session, joinedload
 
 from rop.application.ports.repositories import MenuRepository
-from rop.domain.common.ids import MenuId, MenuItemId, RestaurantId
+from rop.domain.common.ids import CategoryId, MenuId, MenuItemId, RestaurantId
 from rop.domain.common.money import Money
-from rop.domain.menu.entities import AllowedModifier, Menu, MenuItem, ModifierKind
-from rop.infrastructure.db.models.menu import MenuModel
+from rop.domain.menu.entities import (
+    AllowedModifier,
+    CategoryKind,
+    Menu,
+    MenuCategory,
+    MenuItem,
+    ModifierKind,
+)
+from rop.infrastructure.db.models.menu import MenuItemModel, MenuModel
 from rop.infrastructure.db.session import get_engine
 
 
@@ -21,7 +28,10 @@ class SqlAlchemyMenuRepository(MenuRepository):
     def get_menu_by_restaurant_id(self, restaurant_id: RestaurantId) -> Menu | None:
         statement = (
             select(MenuModel)
-            .options(joinedload(MenuModel.items))
+            .options(
+                joinedload(MenuModel.items).joinedload(MenuItemModel.category),
+                joinedload(MenuModel.restaurant),
+            )
             .where(MenuModel.restaurant_id == str(restaurant_id))
             .order_by(MenuModel.version.desc())
             .limit(1)
@@ -37,8 +47,19 @@ class SqlAlchemyMenuRepository(MenuRepository):
         if updated_at.tzinfo is None:
             updated_at = updated_at.replace(tzinfo=timezone.utc)
 
-        items = []
+        categories_map: dict[str, MenuCategory] = {}
+        items: list[MenuItem] = []
         for item in menu_model.items:
+            category = None
+            if item.category is not None:
+                category = MenuCategory(
+                    category_id=CategoryId(item.category.id),
+                    name=item.category.name,
+                    category_kind=cast(CategoryKind, item.category.category_kind),
+                    cuisine_or_family=item.category.cuisine_or_family,
+                )
+                categories_map[item.category.id] = category
+
             allowed_modifiers = [
                 modifier
                 for modifier in (
@@ -54,7 +75,7 @@ class SqlAlchemyMenuRepository(MenuRepository):
                     description=item.description,
                     price_money=Money(amount_cents=item.price_cents, currency=item.currency),
                     is_available=item.is_available,
-                    category_id=None,
+                    category_id=item.category_id,
                     allowed_modifiers=allowed_modifiers,
                 )
             )
@@ -63,7 +84,9 @@ class SqlAlchemyMenuRepository(MenuRepository):
             menu_id=MenuId(menu_model.id),
             restaurant_id=RestaurantId(menu_model.restaurant_id),
             version=menu_model.version,
-            categories=[],
+            categories=sorted(
+                categories_map.values(), key=lambda category: str(category.category_id)
+            ),
             items=items,
             updated_at=updated_at,
         )

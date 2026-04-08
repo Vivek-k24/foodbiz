@@ -4,9 +4,28 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 
-from rop.domain.common.ids import MenuItemId, OrderId, OrderLineId, RestaurantId, TableId
+from rop.domain.common.ids import (
+    LocationId,
+    MenuItemId,
+    OrderId,
+    OrderLineId,
+    RestaurantId,
+    SessionId,
+    TableId,
+)
+from rop.domain.common.location_keys import table_location_id
 from rop.domain.common.money import Money
 from rop.domain.order.value_objects import OrderLineModifier
+
+
+class OrderSource(str, Enum):
+    WEB_DINE_IN = "WEB_DINE_IN"
+    STAFF_CONSOLE = "STAFF_CONSOLE"
+    ONLINE_PICKUP = "ONLINE_PICKUP"
+    ONLINE_DELIVERY = "ONLINE_DELIVERY"
+    KITCHEN_INTERNAL = "KITCHEN_INTERNAL"
+    EMPLOYEE_MEAL = "EMPLOYEE_MEAL"
+    SYSTEM = "SYSTEM"
 
 
 class OrderStatus(str, Enum):
@@ -15,6 +34,7 @@ class OrderStatus(str, Enum):
     READY = "READY"
     SERVED = "SERVED"
     SETTLED = "SETTLED"
+    CANCELLED = "CANCELLED"
 
 
 @dataclass(frozen=True)
@@ -42,16 +62,26 @@ class OrderLine:
 class Order:
     order_id: OrderId
     restaurant_id: RestaurantId
-    table_id: TableId
     status: OrderStatus
     lines: list[OrderLine]
     total: Money
     created_at: datetime
+    location_id: LocationId | None = None
+    table_id: TableId | None = None
+    session_id: SessionId | None = None
+    source: OrderSource = OrderSource.WEB_DINE_IN
+    updated_at: datetime | None = None
     version: int = 1
     idempotency_key: str | None = None
     idempotency_hash: str | None = None
 
     def __post_init__(self) -> None:
+        if self.location_id is None:
+            if self.table_id is None:
+                raise ValueError("order must include either location_id or table_id")
+            object.__setattr__(self, "location_id", table_location_id(self.table_id))
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.created_at)
         if not self.lines:
             raise ValueError("order must contain at least one line")
         if self.version < 1:
@@ -87,10 +117,13 @@ class Order:
 def create_placed_order(
     order_id: OrderId,
     restaurant_id: RestaurantId,
-    table_id: TableId,
     lines: list[OrderLine],
     now: datetime,
     *,
+    location_id: LocationId | None = None,
+    table_id: TableId | None = None,
+    session_id: SessionId | None = None,
+    source: OrderSource = OrderSource.WEB_DINE_IN,
     idempotency_key: str | None = None,
     idempotency_hash: str | None = None,
 ) -> Order:
@@ -105,11 +138,15 @@ def create_placed_order(
     return Order(
         order_id=order_id,
         restaurant_id=restaurant_id,
+        location_id=location_id,
         table_id=table_id,
+        session_id=session_id,
+        source=source,
         status=OrderStatus.PLACED,
         lines=lines,
         total=total,
         created_at=now,
+        updated_at=now,
         version=1,
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,

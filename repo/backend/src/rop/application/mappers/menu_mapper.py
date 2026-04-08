@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rop.application.dto.responses import (
     AllowedModifierResponse,
+    MenuCategoryResponse,
     MenuItemResponse,
     MenuResponse,
     MoneyResponse,
@@ -38,7 +39,15 @@ def to_menu_response(menu: Menu) -> MenuResponse:
         menuId=str(menu.menu_id),
         restaurantId=str(menu.restaurant_id),
         menuVersion=menu.version,
-        categories=menu.categories,
+        categories=[
+            MenuCategoryResponse(
+                categoryId=str(category.category_id),
+                name=category.name,
+                categoryKind=category.category_kind,
+                cuisineOrFamily=category.cuisine_or_family,
+            )
+            for category in menu.categories
+        ],
         items=items,
         updatedAt=menu.updated_at,
     )

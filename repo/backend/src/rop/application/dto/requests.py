@@ -31,3 +31,17 @@ class PlaceOrderLineRequest(CamelBaseModel):
 class PlaceOrderRequest(CamelBaseModel):
     lines: list[PlaceOrderLineRequest] = Field(min_length=1)
     note: str | None = None
+    source: str | None = None
+
+
+class CreateOrderRequest(PlaceOrderRequest):
+    restaurant_id: str
+    location_id: str
+    session_id: str | None = None
+    table_id: str | None = None
+
+
+class OpenSessionRequest(CamelBaseModel):
+    opened_by_role_id: str | None = None
+    opened_by_source: str | None = None
+    notes: str | None = None

@@ -3,30 +3,39 @@
   font-family: "Segoe UI", Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  background: #f3f3f3;
-  color: #111111;
-  --bg: #f3f3f3;
+  background: #ececec;
+  color: #141414;
+  --bg: #ececec;
   --surface: #ffffff;
-  --surface-muted: #fafafa;
-  --border: #d6d6d6;
-  --border-strong: #8a8a8a;
-  --text: #111111;
+  --surface-muted: #f5f5f5;
+  --surface-strong: #e7e7e7;
+  --border: #d4d4d4;
+  --border-strong: #8e8e8e;
+  --text: #141414;
   --text-muted: #5f5f5f;
-  --shadow: 0 12px 30px rgba(0, 0, 0, 0.06);
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.08);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
-  background: var(--bg);
+  background: linear-gradient(180deg, #f5f5f5 0%, #ebebeb 100%);
   color: var(--text);
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -34,242 +43,216 @@ button {
   border: 0;
 }
 
-.container {
-  max-width: 1100px;
+.staffConsoleRoot {
+  max-width: 1560px;
   margin: 0 auto;
-  padding: 32px 20px 48px;
+  padding: 24px 20px 36px;
 }
 
-.header,
-.cardHeader,
-.sectionHeader,
-.toolbar,
-.rowHeader,
-.actionsBar,
-.fieldRow,
-.tabs,
-.rowActions {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.header,
-.cardHeader,
-.sectionHeader,
-.toolbar,
-.rowHeader {
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.header {
-  margin-bottom: 20px;
-}
-
-.eyebrow,
-.label,
-.statLabel {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.title,
-.sectionTitle,
-.subheading,
-.rowTitle {
-  margin: 0;
-  color: var(--text);
-}
-
-.title {
-  font-size: clamp(2rem, 3vw, 2.6rem);
-  line-height: 1.05;
-}
-
-.subtitle,
-.hint,
-.muted,
-.rowBody,
-.rowMeta {
-  color: var(--text-muted);
-}
-
-.subtitle,
-.hint,
-.rowBody,
-.rowMeta,
-.statValue,
-.muted {
-  margin: 0;
-}
-
-.badge,
-.chip,
-.tab,
-.btn,
-.input,
-.row,
-.card,
-.statCard,
-.emptyState,
+.cardSurface,
+.shellPane,
+.globalBanner,
+.secondaryNav,
+.queueItem,
+.locationTile,
+.detailHeaderCard,
+.detailOrderCard,
+.emptyBox,
+.infoBox,
 .errorBox,
-.infoBox {
-  border-radius: 16px;
-}
-
+.modeButton,
+.primaryButton,
+.secondaryButton,
+.inputField,
 .badge,
-.chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  padding: 6px 12px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  background: #f7f7f7;
+.miniChip {
+  border-radius: 18px;
 }
 
-.badgeStrong,
-.btnPrimary,
-.tabActive {
-  background: #111111;
-  border-color: #111111;
-  color: #ffffff;
-}
-
-.badgeMuted {
-  background: #e6e6e6;
-}
-
-.card {
+.consoleTopBar,
+.shellPane,
+.globalBanner,
+.secondaryNav,
+.detailHeaderCard,
+.detailOrderCard,
+.queueItem,
+.locationTile,
+.emptyBox,
+.infoBox,
+.errorBox {
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow);
 }
 
-.cardHeader {
-  padding: 22px 22px 0;
-}
-
-.cardBody {
+.consoleTopBar {
   padding: 22px;
-}
-
-.pageStack {
   display: grid;
-  gap: 16px;
+  gap: 18px;
 }
 
-.boardGrid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.layoutGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-  gap: 16px;
-}
-
-.column {
-  border: 1px solid var(--border);
-  background: var(--surface-muted);
-  border-radius: 18px;
-  padding: 16px;
-}
-
-.columnPlaced {
-  background: #f7f7f7;
-}
-
-.columnAccepted {
-  background: #efefef;
-}
-
-.columnReady {
-  background: #e3e3e3;
-}
-
-.columnServed {
-  background: #d7d7d7;
-}
-
-.columnHeader {
+.consoleHeading,
+.paneHeader,
+.sectionHeaderCompact,
+.queueItemHeader,
+.locationTileHeader,
+.detailHeaderRow,
+.detailActionsRow,
+.toolbarActions,
+.badgeRow {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
   gap: 12px;
-  margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
-.cardList {
+.consoleHeading,
+.paneHeader,
+.sectionHeaderCompact,
+.queueItemHeader,
+.locationTileHeader,
+.detailHeaderRow {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.eyebrow,
+.fieldLabel,
+.summaryLabel,
+.tileLabel {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pageTitle,
+.paneTitle,
+.sectionTitleSmall,
+.queueItemTitle,
+.locationTileTitle,
+.detailLocationName {
+  margin: 0;
+  color: var(--text);
+}
+
+.pageTitle {
+  font-size: clamp(2rem, 3.8vw, 3rem);
+  line-height: 1.04;
+}
+
+.pageSubtitle,
+.paneHint,
+.mutedLine,
+.inlineNote {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.pageSubtitle {
+  max-width: 70ch;
+}
+
+.modeSwitch,
+.summaryStrip,
+.toolbarGrid,
+.consoleShell,
+.queueSections,
+.queueList,
+.zoneStack,
+.locationGrid,
+.detailStatsGrid,
+.detailOrderList,
+.orderLineList,
+.chipGroup {
   display: grid;
   gap: 12px;
 }
 
-.tabs {
-  margin-bottom: 16px;
+.modeSwitch {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
-.tab,
-.btn {
+.modeButton,
+.primaryButton,
+.secondaryButton {
   border: 1px solid var(--border-strong);
   background: #ffffff;
   color: var(--text);
   cursor: pointer;
-  padding: 10px 14px;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
+  padding: 11px 14px;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease, border-color 120ms ease;
 }
 
-.tab:hover,
-.btn:hover,
-.rowSelectable:hover {
+.modeButton:hover,
+.primaryButton:hover,
+.secondaryButton:hover,
+.queueItem:hover,
+.locationTile:hover {
   background: #efefef;
 }
 
-.btnPrimary:hover {
-  background: #222222;
+.modeButtonActive,
+.primaryButton,
+.badgeLive {
+  background: #111111;
   color: #ffffff;
+  border-color: #111111;
 }
 
-.tab:active,
-.btn:active,
-.rowSelectable:active {
+.modeButton:active,
+.primaryButton:active,
+.secondaryButton:active,
+.queueItem:active,
+.locationTile:active {
   transform: translateY(1px);
 }
 
-.btnSecondary {
-  background: #ffffff;
+.modeButton:focus,
+.primaryButton:focus,
+.secondaryButton:focus,
+.queueItem:focus,
+.locationTile:focus,
+.inputField:focus {
+  outline: 2px solid #111111;
+  outline-offset: 2px;
 }
 
-.btnDanger {
-  background: #d4d4d4;
-  border-color: #8b8b8b;
-  color: #111111;
-}
-
-.btnSmall {
-  padding: 8px 12px;
-}
-
-.tab:disabled,
-.btn:disabled {
+.modeButton:disabled,
+.primaryButton:disabled,
+.secondaryButton:disabled {
   cursor: not-allowed;
-  background: #ebebeb;
+  background: #e8e8e8;
   color: #9a9a9a;
   border-color: #d5d5d5;
-  transform: none;
 }
 
-.input {
+.summaryStrip {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.summaryMetric {
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  border-radius: 16px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
+}
+
+.toolbarGrid {
+  grid-template-columns: minmax(220px, 1.4fr) repeat(2, minmax(160px, 0.8fr)) auto;
+  align-items: end;
+}
+
+.fieldGroup {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inputField {
   width: 100%;
   border: 1px solid var(--border-strong);
   background: #ffffff;
@@ -277,225 +260,305 @@ button {
   padding: 11px 12px;
 }
 
-.input:focus,
-.tab:focus,
-.btn:focus,
-.rowSelectable:focus {
-  outline: 2px solid #111111;
-  outline-offset: 2px;
+.toolbarActions {
+  justify-content: flex-end;
+  align-items: center;
 }
 
-.fieldGroup {
-  flex: 1 1 220px;
-  min-width: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.actionsBar {
-  margin-top: 16px;
-}
-
-.listStack {
-  display: grid;
-  gap: 12px;
-}
-
-.orderCard {
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
   border: 1px solid var(--border);
-  background: #ffffff;
-  border-radius: 16px;
-  padding: 16px;
+  background: #f3f3f3;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.orderCardPlaced {
-  border-left: 5px solid #2563eb;   /* blue */
+.badgeMuted {
+  background: #e1e1e1;
+  color: #2b2b2b;
 }
 
-.orderCardAccepted {
-  border-left: 5px solid #f59e0b;   /* amber */
+.badgeTypeTable,
+.badgeLocationAvailable,
+.badgeOrderPlaced {
+  background: #f2f2f2;
 }
 
-.orderCardReady {
-  border-left: 5px solid #16a34a;   /* green */
+.badgeTypeKiosk,
+.badgeLocationOccupied,
+.badgeOrderAccepted {
+  background: #dfdfdf;
 }
 
-.orderCardServed {
-  border-left: 5px solid #7c3aed;   /* purple */
-  background: #fafafa;
+.badgeTypeBar,
+.badgeLocationOrdering,
+.badgeOrderReady,
+.badgeLocationTurnover {
+  background: #c8c8c8;
 }
 
-/* optional: settled if you ever show it */
-.orderCardSettled {
-  border-left: 5px solid #6b7280;   /* slate */
-  opacity: 0.85;
+.badgeLocationAttention,
+.badgeOrderServed,
+.badgeLocationManual {
+  background: #9f9f9f;
+  border-color: #7d7d7d;
 }
 
-.row {
+.badgeOrderSettled {
+  background: #575757;
+  border-color: #444444;
+  color: #ffffff;
+}
+
+.consoleShellLarge {
+  grid-template-columns: 320px minmax(0, 1fr) 380px;
+  align-items: start;
+}
+
+.consoleShellMedium {
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  align-items: start;
+}
+
+.consoleShellNarrow {
+  grid-template-columns: 1fr;
+}
+
+.secondaryNav {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  margin: 14px 0;
+}
+
+.shellPane {
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.queueSections,
+.zoneStack,
+.detailOrderList {
+  gap: 16px;
+}
+
+.queueSection,
+.zoneSection,
+.detailSection {
+  display: grid;
+  gap: 10px;
+}
+
+.sectionTitleSmall {
+  font-size: 1rem;
+}
+
+.queueList,
+.locationGrid {
+  gap: 10px;
+}
+
+.locationGrid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.locationGridBar {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.queueItem,
+.locationTile,
+.detailOrderCard {
   width: 100%;
-  border: 1px solid var(--border);
-  background: var(--surface-muted);
-  padding: 16px;
+  padding: 14px;
   text-align: left;
 }
 
-.rowSelectable {
-  cursor: pointer;
+.queueItemActive,
+.locationTileActive {
+  border-color: #111111;
+  box-shadow: 0 0 0 2px rgba(17, 17, 17, 0.12);
 }
 
-.rowSelected {
-  border-color: #111111;
+.locationTileAvailable {
+  background: #fbfbfb;
+}
+
+.locationTileOccupied {
   background: #f0f0f0;
 }
 
-.rowMeta {
-  display: grid;
-  gap: 6px;
+.locationTileOrdering {
+  background: #e4e4e4;
 }
 
-.orderMeta {
+.locationTileAttention {
+  background: #d0d0d0;
+}
+
+.locationTileTurnover {
+  background: #dadada;
+}
+
+.locationTileManual {
+  background: #ededed;
+}
+
+.queueItemMeta,
+.tileTimestamps,
+.orderSummaryRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tileStats,
+.detailStatsGrid {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.tileStats > div,
+.detailStat {
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  border-radius: 14px;
+  padding: 10px 12px;
   display: grid;
   gap: 4px;
-  margin-top: 12px;
-  color: var(--text-muted);
 }
 
-.rowActions {
-  margin-top: 14px;
-}
-
-.actionRow {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.linesList {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+.detailHeaderCard {
+  padding: 16px;
   display: grid;
-  gap: 10px;
+  gap: 14px;
 }
 
-.lineItem {
-  padding: 0;
-  color: var(--text);
+.detailActionsRow {
+  justify-content: flex-end;
 }
 
-.modifierChips {
+.primaryButton,
+.secondaryButton {
+  min-height: 42px;
+}
+
+.secondaryButton {
+  background: #ffffff;
+}
+
+.inlineNote,
+.globalBanner,
+.infoBox,
+.errorBox,
+.emptyBox {
+  padding: 12px 14px;
+}
+
+.globalBanner,
+.infoBox,
+.emptyBox {
+  background: #f5f5f5;
+}
+
+.errorBox {
+  background: #ececec;
+  border-style: solid;
+}
+
+.emptyBox {
+  border: 1px dashed var(--border-strong);
+}
+
+.detailHeaderRow,
+.queueItemHeader,
+.locationTileHeader {
+  align-items: flex-start;
+}
+
+.badgeRow,
+.chipGroup {
+  justify-content: flex-end;
+}
+
+.chipGroup {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
 }
 
-.modifierChip {
+.miniChip {
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--border);
-  background: #f1f1f1;
-  border-radius: 999px;
   padding: 4px 8px;
+  border: 1px solid var(--border);
+  background: #efefef;
   color: var(--text-muted);
   font-size: 0.82rem;
 }
 
-.lineNotes {
-  margin: 4px 0 0;
-  color: var(--text-muted);
-  font-size: 0.92rem;
+.orderLineList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
-.statsGrid {
+.orderLineItem {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 12px;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
 }
 
-.statCard {
-  border: 1px solid var(--border);
-  background: #fcfcfc;
-  padding: 12px 14px;
+.orderLineItem:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
-.statValue {
-  margin-top: 6px;
-  font-weight: 700;
-}
-
-.chipOpen,
-.chipPlaced {
-  background: #ededed;
-  color: #111111;
-}
-
-.chipAccepted {
-  background: #d9d9d9;
-  color: #111111;
-}
-
-.chipReady,
-.chipClosed {
-  background: #bfbfbf;
-  border-color: #989898;
-  color: #222222;
-}
-
-.chipServed {
-  background: #8d8d8d;
-  border-color: #666666;
-  color: #111111;
-}
-
-.chipSettled {
-  background: #5f5f5f;
-  border-color: #4a4a4a;
-  color: #ffffff;
-}
-
-.errorBox,
-.infoBox,
-.emptyState {
-  border: 1px solid var(--border-strong);
-  background: #f4f4f4;
-  padding: 12px 14px;
-}
-
-.infoBox {
-  background: #fafafa;
-}
-
-.emptyState {
-  border-style: dashed;
-}
-
-.divider {
-  height: 1px;
-  background: var(--border);
-  margin: 18px 0;
-}
-
-.mono {
+.monoLine {
   font-family: Consolas, "SFMono-Regular", monospace;
 }
 
-@media (max-width: 1120px) {
-  .boardGrid {
+@media (max-width: 1180px) {
+  .toolbarGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .toolbarActions {
+    justify-content: flex-start;
   }
 }
 
-@media (max-width: 900px) {
-  .boardGrid,
-  .layoutGrid,
-  .statsGrid {
+@media (max-width: 760px) {
+  .staffConsoleRoot {
+    padding: 16px 14px 28px;
+  }
+
+  .toolbarGrid,
+  .summaryStrip,
+  .detailStatsGrid,
+  .tileStats,
+  .locationGrid,
+  .locationGridBar {
     grid-template-columns: 1fr;
   }
 
-  .container {
-    padding-inline: 16px;
+  .secondaryNav,
+  .detailActionsRow,
+  .badgeRow,
+  .toolbarActions {
+    justify-content: stretch;
+  }
+
+  .modeButton,
+  .primaryButton,
+  .secondaryButton {
+    width: 100%;
   }
 }

@@ -16,14 +16,22 @@ from rop.application.ports.repositories import (
 )
 from rop.application.ports.repositories import (
     MenuRepository,
+    OrderEventRecord,
     OrderRepository,
     TableRepository,
 )
 from rop.application.use_cases.context import TraceContext
-from rop.domain.common.ids import OrderId, OrderLineId, RestaurantId, TableId
+from rop.domain.common.ids import (
+    OrderEventId,
+    OrderId,
+    OrderLineId,
+    RestaurantId,
+    TableId,
+)
+from rop.domain.common.location_keys import table_location_id
 from rop.domain.common.money import Money
 from rop.domain.menu.entities import AllowedModifier, MenuItem
-from rop.domain.order.entities import OrderLine, create_placed_order
+from rop.domain.order.entities import OrderLine, OrderSource, create_placed_order
 from rop.domain.order.events import OrderPlaced
 from rop.domain.order.value_objects import OrderLineModifier
 from rop.domain.table.entities import TableClosedError
@@ -54,6 +62,10 @@ class InvalidModifierError(Exception):
 
 
 class InvalidModifierValueError(Exception):
+    pass
+
+
+class InvalidOrderSourceError(Exception):
     pass
 
 
@@ -124,10 +136,21 @@ class PlaceOrder:
 
         now = datetime.now(timezone.utc)
         payload_hash = _request_hash(request_dto)
+        location_id = table_location_id(table_id)
+        get_active_session_id = getattr(self._table_repository, "get_active_session_id", None)
+        session_id = (
+            get_active_session_id(table_id=table_id, restaurant_id=restaurant_id)
+            if callable(get_active_session_id)
+            else None
+        )
+        source = _validated_order_source(request_dto.source)
         order = create_placed_order(
             order_id=OrderId(f"ord_{uuid4().hex[:12]}"),
             restaurant_id=restaurant_id,
+            location_id=location_id,
             table_id=table_id,
+            session_id=session_id,
+            source=source,
             lines=order_lines,
             now=now,
             idempotency_key=idempotency_key,
@@ -149,13 +172,40 @@ class PlaceOrder:
             self._order_repository.add(order)
 
         if created:
+            persisted_location_id = persisted_order.location_id
+            assert persisted_location_id is not None
             event = OrderPlaced(
                 order_id=persisted_order.order_id,
                 restaurant_id=persisted_order.restaurant_id,
+                location_id=persisted_location_id,
                 table_id=persisted_order.table_id,
+                session_id=persisted_order.session_id,
+                source=persisted_order.source,
                 total=persisted_order.total,
                 created_at=persisted_order.created_at,
             )
+            append_event = getattr(self._order_repository, "append_event", None)
+            if callable(append_event):
+                append_event(
+                    OrderEventRecord(
+                        event_id=OrderEventId(f"evt_{uuid4().hex[:12]}"),
+                        order_id=persisted_order.order_id,
+                        restaurant_id=persisted_order.restaurant_id,
+                        location_id=persisted_location_id,
+                        session_id=persisted_order.session_id,
+                        event_type="ORDER_PLACED",
+                        order_status_after=persisted_order.status,
+                        triggered_by_source=persisted_order.source,
+                        created_at=event.created_at,
+                        metadata={
+                            "request_id": trace_ctx.request_id,
+                            "trace_id": trace_ctx.trace_id,
+                            "table_id": str(persisted_order.table_id)
+                            if persisted_order.table_id is not None
+                            else None,
+                        },
+                    )
+                )
             message = serialize_order_event(
                 event_type="order.placed",
                 occurred_at=event.created_at,
@@ -176,6 +226,15 @@ def _request_hash(request_dto: PlaceOrderRequest) -> str:
     normalized_payload = request_dto.model_dump(mode="json", by_alias=True, exclude_none=False)
     canonical = json.dumps(normalized_payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validated_order_source(raw_source: str | None) -> OrderSource:
+    if raw_source is None:
+        return OrderSource.WEB_DINE_IN
+    try:
+        return OrderSource(raw_source)
+    except ValueError as exc:
+        raise InvalidOrderSourceError(f"invalid order source: {raw_source}") from exc
 
 
 def _validated_modifiers(

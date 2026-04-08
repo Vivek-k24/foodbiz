@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.15.0",
   "scripts": {
     "dev": "pnpm --filter web-ordering dev",
-    "dev:dashboard": "pnpm --filter dashboard dev"
+    "dev:dashboard": "pnpm --filter dashboard dev",
+    "dev:staff-console": "pnpm --filter dashboard dev"
   }
 }

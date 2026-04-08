@@ -37,6 +37,10 @@ def serialize_order_event(
     trace_id: str | None,
     request_id: str | None,
 ) -> str:
+    location_id = order.location_id
+    updated_at = order.updated_at
+    assert location_id is not None
+    assert updated_at is not None
     return _serialize_event(
         event_type=event_type,
         occurred_at=occurred_at,
@@ -45,13 +49,17 @@ def serialize_order_event(
         request_id=request_id,
         payload={
             "orderId": str(order.order_id),
-            "tableId": str(order.table_id),
+            "locationId": str(location_id),
+            "tableId": str(order.table_id) if order.table_id is not None else None,
+            "sessionId": str(order.session_id) if order.session_id is not None else None,
+            "source": order.source.value,
             "status": order.status.value,
             "totalMoney": {
                 "amountCents": order.total.amount_cents,
                 "currency": order.total.currency,
             },
             "createdAt": order.created_at.isoformat(),
+            "updatedAt": updated_at.isoformat(),
             "lines": [
                 {
                     "lineId": str(line.line_id),

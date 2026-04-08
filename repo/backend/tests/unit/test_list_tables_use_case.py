@@ -43,6 +43,9 @@ class FakeTableRepository:
     def restaurant_exists(self, restaurant_id: RestaurantId) -> bool:
         return self._exists
 
+    def get_active_session_id(self, table_id: TableId, restaurant_id: RestaurantId):
+        return None
+
     def list_for_restaurant(
         self,
         restaurant_id: RestaurantId,

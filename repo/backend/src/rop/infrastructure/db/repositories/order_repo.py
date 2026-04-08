@@ -11,14 +11,24 @@ from rop.application.ports.repositories import (
     IdempotencyReplayMismatchError,
     InvalidCursorError,
     OptimisticConcurrencyError,
+    OrderEventRecord,
     OrderRepository,
     TableOrderSummaryData,
 )
-from rop.domain.common.ids import MenuItemId, OrderId, OrderLineId, RestaurantId, TableId
+from rop.domain.common.ids import (
+    LocationId,
+    MenuItemId,
+    OrderEventId,
+    OrderId,
+    OrderLineId,
+    RestaurantId,
+    SessionId,
+    TableId,
+)
 from rop.domain.common.money import Money
-from rop.domain.order.entities import Order, OrderLine, OrderStatus
+from rop.domain.order.entities import Order, OrderLine, OrderSource, OrderStatus
 from rop.domain.order.value_objects import OrderLineModifier
-from rop.infrastructure.db.models.order import OrderLineModel, OrderModel
+from rop.infrastructure.db.models.order import OrderEventModel, OrderLineModel, OrderModel
 from rop.infrastructure.db.session import get_engine
 
 
@@ -27,9 +37,8 @@ class SqlAlchemyOrderRepository(OrderRepository):
         self._engine = engine or get_engine()
 
     def add(self, order: Order) -> None:
-        order_model = self._to_model(order)
         with Session(self._engine) as session:
-            session.add(order_model)
+            session.add(self._to_model(order))
             session.commit()
 
     def get(self, order_id: OrderId) -> Order | None:
@@ -41,20 +50,21 @@ class SqlAlchemyOrderRepository(OrderRepository):
         )
         with Session(self._engine) as session:
             model = session.execute(statement).unique().scalar_one_or_none()
-
-        if model is None:
-            return None
-
-        return self._to_domain(model)
+        return self._to_domain(model) if model is not None else None
 
     def update(self, order: Order) -> None:
         statement = (
             update(OrderModel)
             .where(OrderModel.id == str(order.order_id))
             .values(
+                location_id=str(order.location_id),
+                table_id=str(order.table_id) if order.table_id is not None else None,
+                session_id=str(order.session_id) if order.session_id is not None else None,
+                source=order.source.value,
                 status=order.status.value,
                 total_cents=order.total.amount_cents,
                 currency=order.total.currency,
+                updated_at=order.updated_at,
                 version=order.version,
             )
         )
@@ -68,21 +78,17 @@ class SqlAlchemyOrderRepository(OrderRepository):
         table_id: TableId,
         key: str,
     ) -> Order | None:
+        conditions = [
+            OrderModel.restaurant_id == str(restaurant_id),
+            OrderModel.idempotency_key == key,
+            OrderModel.table_id == str(table_id),
+        ]
         statement = (
-            select(OrderModel)
-            .options(joinedload(OrderModel.lines))
-            .where(
-                OrderModel.restaurant_id == str(restaurant_id),
-                OrderModel.table_id == str(table_id),
-                OrderModel.idempotency_key == key,
-            )
-            .limit(1)
+            select(OrderModel).options(joinedload(OrderModel.lines)).where(*conditions).limit(1)
         )
         with Session(self._engine) as session:
             model = session.execute(statement).unique().scalar_one_or_none()
-        if model is None:
-            return None
-        return self._to_domain(model)
+        return self._to_domain(model) if model is not None else None
 
     def add_with_idempotency(
         self,
@@ -90,15 +96,17 @@ class SqlAlchemyOrderRepository(OrderRepository):
         key: str,
         payload_hash: str,
     ) -> Order:
-        statement = (
-            select(OrderModel)
-            .options(joinedload(OrderModel.lines))
-            .where(
-                OrderModel.restaurant_id == str(order.restaurant_id),
-                OrderModel.table_id == str(order.table_id),
-                OrderModel.idempotency_key == key,
+        if order.table_id is None:
+            raise IdempotencyReplayMismatchError(
+                "table-scoped idempotency requires a concrete table_id"
             )
-            .limit(1)
+        conditions = [
+            OrderModel.restaurant_id == str(order.restaurant_id),
+            OrderModel.table_id == str(order.table_id),
+            OrderModel.idempotency_key == key,
+        ]
+        statement = (
+            select(OrderModel).options(joinedload(OrderModel.lines)).where(*conditions).limit(1)
         )
 
         with Session(self._engine) as session:
@@ -147,6 +155,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
             .values(
                 status=new_status.value,
                 version=OrderModel.version + 1,
+                updated_at=datetime.now(timezone.utc),
             )
             .returning(OrderModel.id)
         )
@@ -177,19 +186,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
         if status is not None:
             statement = statement.where(OrderModel.status == status.value)
 
-        cursor_parts = _decode_cursor(cursor) if cursor else None
-        if cursor_parts is not None:
-            cursor_created_at, cursor_order_id = cursor_parts
-            statement = statement.where(
-                or_(
-                    OrderModel.created_at < cursor_created_at,
-                    and_(
-                        OrderModel.created_at == cursor_created_at,
-                        OrderModel.id < cursor_order_id,
-                    ),
-                )
-            )
-
+        statement = _apply_order_cursor(statement, cursor)
         statement = statement.order_by(OrderModel.created_at.desc(), OrderModel.id.desc()).limit(
             limit + 1
         )
@@ -197,14 +194,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
         with Session(self._engine) as session:
             models = list(session.execute(statement).unique().scalars().all())
 
-        has_more = len(models) > limit
-        page_models = models[:limit]
-        orders = [self._to_domain(model) for model in page_models]
-        next_cursor: str | None = None
-        if has_more and page_models:
-            last = page_models[-1]
-            next_cursor = _encode_cursor(last.created_at, last.id)
-        return orders, next_cursor
+        return _page_orders(models, limit, self._to_domain)
 
     def list_for_table(
         self,
@@ -225,19 +215,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
         if status is not None:
             statement = statement.where(OrderModel.status == status.value)
 
-        cursor_parts = _decode_cursor(cursor) if cursor else None
-        if cursor_parts is not None:
-            cursor_created_at, cursor_order_id = cursor_parts
-            statement = statement.where(
-                or_(
-                    OrderModel.created_at < cursor_created_at,
-                    and_(
-                        OrderModel.created_at == cursor_created_at,
-                        OrderModel.id < cursor_order_id,
-                    ),
-                )
-            )
-
+        statement = _apply_order_cursor(statement, cursor)
         statement = statement.order_by(OrderModel.created_at.desc(), OrderModel.id.desc()).limit(
             limit + 1
         )
@@ -245,14 +223,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
         with Session(self._engine) as session:
             models = list(session.execute(statement).unique().scalars().all())
 
-        has_more = len(models) > limit
-        page_models = models[:limit]
-        orders = [self._to_domain(model) for model in page_models]
-        next_cursor: str | None = None
-        if has_more and page_models:
-            last = page_models[-1]
-            next_cursor = _encode_cursor(last.created_at, last.id)
-        return orders, next_cursor
+        return _page_orders(models, limit, self._to_domain)
 
     def summarize_for_table(
         self,
@@ -262,18 +233,11 @@ class SqlAlchemyOrderRepository(OrderRepository):
         aggregates_statement = select(
             func.count(OrderModel.id),
             func.coalesce(func.sum(OrderModel.total_cents), 0),
-            func.coalesce(
-                func.sum(case((OrderModel.status == "PLACED", 1), else_=0)),
-                0,
-            ),
-            func.coalesce(
-                func.sum(case((OrderModel.status == "ACCEPTED", 1), else_=0)),
-                0,
-            ),
-            func.coalesce(
-                func.sum(case((OrderModel.status == "READY", 1), else_=0)),
-                0,
-            ),
+            func.coalesce(func.sum(case((OrderModel.status == "PLACED", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((OrderModel.status == "ACCEPTED", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((OrderModel.status == "READY", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((OrderModel.status == "SERVED", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((OrderModel.status == "SETTLED", 1), else_=0)), 0),
             func.max(OrderModel.created_at),
         ).where(
             OrderModel.restaurant_id == str(restaurant_id),
@@ -293,7 +257,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
             aggregates_row = session.execute(aggregates_statement).one()
             currency = session.execute(currency_statement).scalar_one_or_none() or "USD"
 
-        last_order_at = aggregates_row[5]
+        last_order_at = aggregates_row[7]
         if last_order_at and last_order_at.tzinfo is None:
             last_order_at = last_order_at.replace(tzinfo=timezone.utc)
 
@@ -303,18 +267,79 @@ class SqlAlchemyOrderRepository(OrderRepository):
             placed=int(aggregates_row[2] or 0),
             accepted=int(aggregates_row[3] or 0),
             ready=int(aggregates_row[4] or 0),
+            served=int(aggregates_row[5] or 0),
+            settled=int(aggregates_row[6] or 0),
             last_order_at=last_order_at,
             currency=currency,
         )
+
+    def append_event(self, event: OrderEventRecord) -> None:
+        with Session(self._engine) as session:
+            session.add(
+                OrderEventModel(
+                    id=str(event.event_id),
+                    order_id=str(event.order_id),
+                    restaurant_id=str(event.restaurant_id),
+                    location_id=str(event.location_id),
+                    session_id=str(event.session_id) if event.session_id is not None else None,
+                    event_type=event.event_type,
+                    order_status_after=event.order_status_after.value,
+                    triggered_by_source=event.triggered_by_source.value,
+                    created_at=event.created_at,
+                    metadata_json=event.metadata,
+                )
+            )
+            session.commit()
+
+    def list_events(
+        self,
+        restaurant_id: RestaurantId,
+        order_id: OrderId | None = None,
+    ) -> list[OrderEventRecord]:
+        statement = (
+            select(OrderEventModel)
+            .where(OrderEventModel.restaurant_id == str(restaurant_id))
+            .order_by(OrderEventModel.created_at.asc(), OrderEventModel.id.asc())
+        )
+        if order_id is not None:
+            statement = statement.where(OrderEventModel.order_id == str(order_id))
+
+        with Session(self._engine) as session:
+            models = list(session.execute(statement).scalars().all())
+
+        records: list[OrderEventRecord] = []
+        for model in models:
+            created_at = model.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            records.append(
+                OrderEventRecord(
+                    event_id=OrderEventId(model.id),
+                    order_id=OrderId(model.order_id),
+                    restaurant_id=RestaurantId(model.restaurant_id),
+                    location_id=LocationId(model.location_id),
+                    session_id=SessionId(model.session_id) if model.session_id else None,
+                    event_type=model.event_type,
+                    order_status_after=OrderStatus(model.order_status_after),
+                    triggered_by_source=OrderSource(model.triggered_by_source),
+                    created_at=created_at,
+                    metadata=model.metadata_json,
+                )
+            )
+        return records
 
     def _to_model(self, order: Order) -> OrderModel:
         order_model = OrderModel(
             id=str(order.order_id),
             restaurant_id=str(order.restaurant_id),
-            table_id=str(order.table_id),
+            location_id=str(order.location_id),
+            table_id=str(order.table_id) if order.table_id is not None else None,
+            session_id=str(order.session_id) if order.session_id is not None else None,
+            source=order.source.value,
             status=order.status.value,
             version=order.version,
             created_at=order.created_at,
+            updated_at=order.updated_at,
             total_cents=order.total.amount_cents,
             currency=order.total.currency,
             idempotency_key=order.idempotency_key,
@@ -331,6 +356,7 @@ class SqlAlchemyOrderRepository(OrderRepository):
                 currency=line.unit_price.currency,
                 line_total_cents=line.line_total.amount_cents,
                 notes=line.notes,
+                created_at=order.created_at,
                 modifiers_json=[
                     {
                         "code": modifier.code,
@@ -346,10 +372,8 @@ class SqlAlchemyOrderRepository(OrderRepository):
         return order_model
 
     def _to_domain(self, model: OrderModel) -> Order:
-        created_at = model.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-
+        created_at = _ensure_utc(model.created_at)
+        updated_at = _ensure_utc(model.updated_at)
         lines = [
             OrderLine(
                 line_id=OrderLineId(line.id),
@@ -374,15 +398,57 @@ class SqlAlchemyOrderRepository(OrderRepository):
         return Order(
             order_id=OrderId(model.id),
             restaurant_id=RestaurantId(model.restaurant_id),
-            table_id=TableId(model.table_id),
+            location_id=LocationId(model.location_id),
+            table_id=TableId(model.table_id) if model.table_id else None,
+            session_id=SessionId(model.session_id) if model.session_id else None,
+            source=OrderSource(model.source),
             status=OrderStatus(model.status),
             lines=lines,
             total=Money(amount_cents=model.total_cents, currency=model.currency),
             created_at=created_at,
+            updated_at=updated_at,
             version=model.version,
             idempotency_key=model.idempotency_key,
             idempotency_hash=model.idempotency_hash,
         )
+
+
+def _apply_order_cursor(statement, cursor: str | None):
+    cursor_parts = _decode_cursor(cursor) if cursor else None
+    if cursor_parts is None:
+        return statement
+
+    cursor_created_at, cursor_order_id = cursor_parts
+    return statement.where(
+        or_(
+            OrderModel.created_at < cursor_created_at,
+            and_(
+                OrderModel.created_at == cursor_created_at,
+                OrderModel.id < cursor_order_id,
+            ),
+        )
+    )
+
+
+def _page_orders(
+    models: list[OrderModel],
+    limit: int,
+    mapper,
+) -> tuple[list[Order], str | None]:
+    has_more = len(models) > limit
+    page_models = models[:limit]
+    orders = [mapper(model) for model in page_models]
+    next_cursor: str | None = None
+    if has_more and page_models:
+        last = page_models[-1]
+        next_cursor = _encode_cursor(last.created_at, last.id)
+    return orders, next_cursor
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def _encode_cursor(created_at: datetime, order_id: str) -> str:

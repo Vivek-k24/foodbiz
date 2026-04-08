@@ -102,6 +102,12 @@ class FakeOrderRepository:
             last_order_at=None,
         )
 
+    def append_event(self, event: object) -> None:
+        return None
+
+    def list_events(self, restaurant_id: RestaurantId, order_id=None):
+        return []
+
 
 def test_kitchen_queue_returns_orders() -> None:
     payload = KitchenQueue(order_repository=FakeOrderRepository()).execute(

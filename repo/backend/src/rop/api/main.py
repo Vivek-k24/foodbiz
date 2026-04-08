@@ -15,10 +15,16 @@ from starlette.requests import Request
 from rop.api.error_handling import register_exception_handlers
 from rop.api.middleware.request_id import RequestIDMiddleware
 from rop.api.routes.health import router as health_router
+from rop.api.routes.inventory import router as inventory_router
 from rop.api.routes.kitchen import router as kitchen_router
+from rop.api.routes.locations import router as locations_router
 from rop.api.routes.menu import router as menu_router
 from rop.api.routes.metrics import router as metrics_router
+from rop.api.routes.order_events import router as order_events_router
 from rop.api.routes.orders import router as orders_router
+from rop.api.routes.restaurants import router as restaurants_router
+from rop.api.routes.roles import router as roles_router
+from rop.api.routes.sessions import router as sessions_router
 from rop.api.routes.table_orders import router as table_orders_router
 from rop.api.routes.table_registry import router as table_registry_router
 from rop.api.routes.tables import router as tables_router
@@ -112,7 +118,13 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(metrics_router)
+    app.include_router(restaurants_router)
+    app.include_router(locations_router)
+    app.include_router(sessions_router)
     app.include_router(menu_router)
+    app.include_router(roles_router)
+    app.include_router(order_events_router)
+    app.include_router(inventory_router)
     app.include_router(table_registry_router)
     app.include_router(tables_router)
     app.include_router(table_orders_router)

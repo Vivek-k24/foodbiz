@@ -38,7 +38,7 @@ def test_place_order_persists_and_publishes_event() -> None:
         json={
             "lines": [
                 {
-                    "itemId": "itm_001",
+                    "itemId": "itm_010",
                     "quantity": 1,
                     "notes": "well done",
                     "modifiers": [
@@ -47,7 +47,7 @@ def test_place_order_persists_and_publishes_event() -> None:
                     ],
                 },
                 {
-                    "itemId": "itm_003",
+                    "itemId": "itm_011",
                     "quantity": 1,
                     "modifiers": [
                         {"code": "pasta", "label": "Pasta", "value": "rigatoni"},
@@ -55,11 +55,11 @@ def test_place_order_persists_and_publishes_event() -> None:
                     ],
                 },
                 {
-                    "itemId": "drink_003",
+                    "itemId": "itm_026",
                     "quantity": 1,
                     "modifiers": [
                         {"code": "milk", "label": "Milk", "value": "oat"},
-                        {"code": "syrup", "label": "Syrup", "value": "vanilla"},
+                        {"code": "sweetness", "label": "Sweetness", "value": "sweet"},
                     ],
                 },
             ]
@@ -70,7 +70,7 @@ def test_place_order_persists_and_publishes_event() -> None:
     order_id = payload["orderId"]
     assert payload["tableId"] == "tbl_001"
     assert len(payload["lines"]) == 3
-    margherita_line = next(line for line in payload["lines"] if line["itemId"] == "itm_001")
+    margherita_line = next(line for line in payload["lines"] if line["itemId"] == "itm_010")
     assert margherita_line["modifiers"][0]["code"] == "extra_mozzarella"
     assert margherita_line["notes"] == "well done"
 
@@ -78,16 +78,16 @@ def test_place_order_persists_and_publishes_event() -> None:
     assert stored_order_response.status_code == 200
     stored_payload = stored_order_response.json()
     assert stored_payload["orderId"] == order_id
-    carbonara_line = next(line for line in stored_payload["lines"] if line["itemId"] == "itm_003")
-    latte_line = next(line for line in stored_payload["lines"] if line["itemId"] == "drink_003")
+    carbonara_line = next(line for line in stored_payload["lines"] if line["itemId"] == "itm_011")
+    latte_line = next(line for line in stored_payload["lines"] if line["itemId"] == "itm_026")
     assert carbonara_line["modifiers"][0]["code"] == "pasta"
-    assert latte_line["modifiers"][1]["value"] == "vanilla"
+    assert latte_line["modifiers"][1]["value"] == "sweet"
 
     queue_response = client.get("/v1/restaurants/rst_001/kitchen/orders?status=PLACED&limit=10")
     assert queue_response.status_code == 200
     queue_payload = queue_response.json()
     queue_order = next(item for item in queue_payload["orders"] if item["orderId"] == order_id)
-    queue_margherita = next(line for line in queue_order["lines"] if line["itemId"] == "itm_001")
+    queue_margherita = next(line for line in queue_order["lines"] if line["itemId"] == "itm_010")
     assert queue_margherita["modifiers"][1]["value"] == "thin"
 
     message = _wait_for_message(pubsub, timeout_seconds=2.0)

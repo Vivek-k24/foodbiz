@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import Engine, and_, case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
@@ -13,10 +14,15 @@ from rop.application.ports.repositories import (
     TableRegistryRowData,
     TableRepository,
 )
-from rop.domain.common.ids import RestaurantId, TableId
+from rop.domain.common.ids import RestaurantId, SessionId, TableId
+from rop.domain.common.location_keys import table_location_id
+from rop.domain.location.entities import LocationType
+from rop.domain.session.entities import SessionStatus
 from rop.domain.table.entities import Table, TableStatus
+from rop.infrastructure.db.models.location import LocationModel
 from rop.infrastructure.db.models.menu import RestaurantModel
 from rop.infrastructure.db.models.order import OrderModel
+from rop.infrastructure.db.models.session_record import SessionModel
 from rop.infrastructure.db.models.table import TableModel
 from rop.infrastructure.db.session import get_engine
 
@@ -34,11 +40,7 @@ class SqlAlchemyTableRepository(TableRepository):
         )
         with Session(self._engine) as session:
             model = session.execute(statement).scalar_one_or_none()
-
-        if model is None:
-            return None
-
-        return self._to_domain(model)
+        return self._to_domain(model) if model is not None else None
 
     def restaurant_exists(self, restaurant_id: RestaurantId) -> bool:
         statement = (
@@ -47,6 +49,26 @@ class SqlAlchemyTableRepository(TableRepository):
         with Session(self._engine) as session:
             value = session.execute(statement).scalar_one_or_none()
         return value is not None
+
+    def get_active_session_id(
+        self,
+        table_id: TableId,
+        restaurant_id: RestaurantId,
+    ) -> SessionId | None:
+        location_id = table_location_id(table_id)
+        statement = (
+            select(SessionModel.id)
+            .where(
+                SessionModel.restaurant_id == str(restaurant_id),
+                SessionModel.location_id == str(location_id),
+                SessionModel.status == SessionStatus.OPEN.value,
+            )
+            .order_by(SessionModel.opened_at.desc(), SessionModel.id.desc())
+            .limit(1)
+        )
+        with Session(self._engine) as session:
+            value = session.execute(statement).scalar_one_or_none()
+        return SessionId(value) if value is not None else None
 
     def list_for_restaurant(
         self,
@@ -96,43 +118,87 @@ class SqlAlchemyTableRepository(TableRepository):
             next_cursor = _encode_cursor(last.opened_at or _EPOCH, last.id)
         return rows, next_cursor
 
-    def _to_domain(self, model: TableModel) -> Table:
-        opened_at = model.opened_at
-        closed_at = model.closed_at
-        if opened_at and opened_at.tzinfo is None:
-            opened_at = opened_at.replace(tzinfo=timezone.utc)
-        if closed_at and closed_at.tzinfo is None:
-            closed_at = closed_at.replace(tzinfo=timezone.utc)
-        return Table(
-            table_id=TableId(model.id),
-            restaurant_id=RestaurantId(model.restaurant_id),
-            status=TableStatus(model.status),
-            opened_at=opened_at,
-            closed_at=closed_at,
-        )
-
     def upsert(self, table: Table) -> None:
-        statement = (
-            insert(TableModel)
-            .values(
-                id=str(table.table_id),
-                restaurant_id=str(table.restaurant_id),
-                status=table.status.value,
-                opened_at=table.opened_at,
-                closed_at=table.closed_at,
-            )
-            .on_conflict_do_update(
-                index_elements=[TableModel.id],
-                set_={
-                    "restaurant_id": str(table.restaurant_id),
-                    "status": table.status.value,
-                    "opened_at": table.opened_at,
-                    "closed_at": table.closed_at,
-                },
-            )
-        )
+        location_id = table_location_id(table.table_id)
         with Session(self._engine) as session:
-            session.execute(statement)
+            existing_location = session.execute(
+                select(LocationModel).where(LocationModel.id == str(location_id)).limit(1)
+            ).scalar_one_or_none()
+            session.execute(
+                insert(TableModel)
+                .values(
+                    id=str(table.table_id),
+                    restaurant_id=str(table.restaurant_id),
+                    status=table.status.value,
+                    opened_at=table.opened_at,
+                    closed_at=table.closed_at,
+                )
+                .on_conflict_do_update(
+                    index_elements=[TableModel.id],
+                    set_={
+                        "restaurant_id": str(table.restaurant_id),
+                        "status": table.status.value,
+                        "opened_at": table.opened_at,
+                        "closed_at": table.closed_at,
+                    },
+                )
+            )
+            session.execute(
+                insert(LocationModel)
+                .values(
+                    id=str(location_id),
+                    restaurant_id=str(table.restaurant_id),
+                    type=LocationType.TABLE.value,
+                    name=existing_location.name
+                    if existing_location is not None
+                    else str(table.table_id),
+                    display_label=existing_location.display_label
+                    if existing_location is not None
+                    else str(table.table_id).upper(),
+                    capacity=existing_location.capacity if existing_location is not None else 4,
+                    zone=existing_location.zone if existing_location is not None else "Dining Room",
+                    is_active=True,
+                )
+                .on_conflict_do_update(
+                    index_elements=[LocationModel.id],
+                    set_={
+                        "restaurant_id": str(table.restaurant_id),
+                        "type": LocationType.TABLE.value,
+                        "is_active": True,
+                    },
+                )
+            )
+
+            active_session = session.execute(
+                select(SessionModel)
+                .where(
+                    SessionModel.restaurant_id == str(table.restaurant_id),
+                    SessionModel.location_id == str(location_id),
+                    SessionModel.status == SessionStatus.OPEN.value,
+                )
+                .order_by(SessionModel.opened_at.desc(), SessionModel.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+            if table.status == TableStatus.OPEN:
+                if active_session is None:
+                    session.add(
+                        SessionModel(
+                            id=f"ses_{uuid4().hex[:12]}",
+                            restaurant_id=str(table.restaurant_id),
+                            location_id=str(location_id),
+                            status=SessionStatus.OPEN.value,
+                            opened_at=table.opened_at or datetime.now(timezone.utc),
+                            closed_at=None,
+                            opened_by_role_id=None,
+                            opened_by_source="STAFF_CONSOLE",
+                            notes=None,
+                        )
+                    )
+            elif active_session is not None:
+                active_session.status = SessionStatus.CLOSED.value
+                active_session.closed_at = table.closed_at or datetime.now(timezone.utc)
+
             session.commit()
 
     def _load_summaries(
@@ -152,6 +218,8 @@ class SqlAlchemyTableRepository(TableRepository):
                 func.coalesce(func.sum(case((OrderModel.status == "PLACED", 1), else_=0)), 0),
                 func.coalesce(func.sum(case((OrderModel.status == "ACCEPTED", 1), else_=0)), 0),
                 func.coalesce(func.sum(case((OrderModel.status == "READY", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((OrderModel.status == "SERVED", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((OrderModel.status == "SETTLED", 1), else_=0)), 0),
                 func.max(OrderModel.created_at),
                 func.max(OrderModel.currency),
             )
@@ -164,19 +232,36 @@ class SqlAlchemyTableRepository(TableRepository):
 
         summaries: dict[str, TableOrderSummaryData] = {}
         for row in session.execute(statement):
-            last_order_at = row[6]
+            last_order_at = row[8]
             if last_order_at is not None and last_order_at.tzinfo is None:
                 last_order_at = last_order_at.replace(tzinfo=timezone.utc)
-            summaries[row[0]] = TableOrderSummaryData(
+            summaries[str(row[0])] = TableOrderSummaryData(
                 orders_total=int(row[1] or 0),
                 amount_cents=int(row[2] or 0),
                 placed=int(row[3] or 0),
                 accepted=int(row[4] or 0),
                 ready=int(row[5] or 0),
+                served=int(row[6] or 0),
+                settled=int(row[7] or 0),
                 last_order_at=last_order_at,
-                currency=str(row[7] or "USD"),
+                currency=str(row[9] or "USD"),
             )
         return summaries
+
+    def _to_domain(self, model: TableModel) -> Table:
+        opened_at = model.opened_at
+        closed_at = model.closed_at
+        if opened_at and opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
+        if closed_at and closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+        return Table(
+            table_id=TableId(model.id),
+            restaurant_id=RestaurantId(model.restaurant_id),
+            status=TableStatus(model.status),
+            opened_at=opened_at,
+            closed_at=closed_at,
+        )
 
 
 def _encode_cursor(opened_at: datetime, table_id: str) -> str:
@@ -202,6 +287,8 @@ def _empty_table_summary() -> TableOrderSummaryData:
         placed=0,
         accepted=0,
         ready=0,
+        served=0,
+        settled=0,
         amount_cents=0,
         currency="USD",
         last_order_at=None,

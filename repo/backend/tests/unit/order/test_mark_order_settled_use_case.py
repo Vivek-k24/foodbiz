@@ -100,6 +100,12 @@ class FakeOrderRepository:
             last_order_at=None,
         )
 
+    def append_event(self, event: object) -> None:
+        return None
+
+    def list_events(self, restaurant_id: RestaurantId, order_id=None):
+        return []
+
 
 class FakePublisher:
     def __init__(self) -> None:
