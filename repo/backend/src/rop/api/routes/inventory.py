@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-from rop.application.dto.responses import InventoryStubResponse
+from rop.api.dependencies import get_inventory_service
+from rop.application.inventory.service import InventoryService
 
 router = APIRouter()
 
 
-@router.get("/v1/inventory/status", response_model=InventoryStubResponse)
-def inventory_status() -> InventoryStubResponse:
-    return InventoryStubResponse(
-        status="NOT_IMPLEMENTED",
-        message="Inventory subsystem boundary exists, but stock logic is intentionally deferred.",
-        implemented=False,
-    )
+@router.get("/v1/inventory/status")
+def inventory_status(
+    service: InventoryService = Depends(get_inventory_service),
+) -> dict[str, object]:
+    return service.status()

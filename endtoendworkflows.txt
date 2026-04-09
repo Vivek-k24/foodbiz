@@ -1,0 +1,199 @@
+1. Workflow count
+- 4 major workflows exist right now.
+
+2. Workflow list
+- Customer off-premise ordering: pickup and delivery
+- Customer dine-in ordering: scan-aware table or direct table-context entry
+- Front-of-house operations: staff console occupancy and service follow-through
+- Kitchen prep progression: kitchen display accept and ready flow
+
+3. Detailed workflow breakdowns
+
+- Name
+  Customer off-premise ordering: pickup and delivery
+- Goal
+  Let a normal customer land on the public restaurant site, choose pickup or delivery, browse the real menu, build a cart, and place an order into the backend.
+- Surfaces involved
+  Restaurant Website
+  Web Ordering
+- Backend/domain objects involved
+  Restaurant
+  Location of type ONLINE_PICKUP or ONLINE_DELIVERY
+  Menu
+  MenuCategory
+  MenuItem
+  AllowedModifier
+  Order
+  OrderLine
+  OrderEvent
+- Step-by-step flow
+  1. Customer lands on the restaurant website.
+  2. The restaurant website fetches `GET /v1/restaurants` and renders the first restaurant returned.
+  3. Customer clicks `Order Pickup` or `Order Delivery`.
+  4. The browser routes to the web-ordering app with `?mode=pickup` or `?mode=delivery`.
+  5. Web ordering loads `GET /v1/restaurants/rst_001/menu` and `GET /v1/restaurants/rst_001/locations?is_active=true`.
+  6. The web-ordering adapter resolves the active context to `loc_online_pickup` or `loc_online_delivery`.
+  7. Menu categories and items are rendered from backend category metadata.
+  8. Customer adds items, modifiers, notes, and quantities to the cart.
+  9. Customer submits `POST /v1/orders` with `restaurantId`, `locationId`, `source`, and `lines`. No session is used for off-premise orders.
+  10. Backend `CreateOrder` validates the source, location, menu items, and modifiers, then creates the order and appends `ORDER_PLACED` into `order_events`.
+  11. Backend publishes `order.placed` over websocket fanout.
+  12. Web ordering shows a success message for the created order.
+- Current status (complete / partial / broken / missing)
+  Partial.
+- Boundary problems
+  Restaurant Website should own the public entry and CTA only.
+  Web Ordering should own the actual customer ordering flow.
+  Staff Console should never own pickup or delivery ordering.
+  Kitchen Display should never be the customer entry point.
+  Current code respects the surface split here.
+- Gaps/blockers
+  Delivery is not a real delivery workflow yet. There is no address, contact, dispatch, or fulfillment detail capture.
+  The restaurant website is only a lightweight entry surface. It is not a full public site yet.
+  Web ordering cannot show off-premise order history because the backend does not expose a generic location-based order history endpoint.
+  The current browser tests for this flow are mocked at the network layer, so they prove route and UI behavior, not live browser-to-backend integration.
+- Max 1 frontend integration test
+  Browser test against a live local backend: open Restaurant Website, click `Order Pickup`, add one real seeded item, place the order, and assert the success message includes a real `ord_` ID.
+- Max 1 backend integration test
+  API test: `POST /v1/orders` with `locationId=loc_online_pickup` and `source=ONLINE_PICKUP`, then assert the order is created with no session and that `/v1/order-events?restaurantId=rst_001&orderId=<id>` includes `ORDER_PLACED`.
+
+- Name
+  Customer dine-in ordering: scan-aware table or direct table-context entry
+- Goal
+  Let a customer arrive at web ordering with table context, order against the correct dining table, and attach that order to the live session if one is open.
+- Surfaces involved
+  Web Ordering
+- Backend/domain objects involved
+  Restaurant
+  Location of type TABLE
+  Session
+  Table projection
+  Menu
+  MenuCategory
+  MenuItem
+  Order
+  OrderLine
+  OrderEvent
+- Step-by-step flow
+  1. Customer lands on web ordering with URL state such as `?mode=dine-in&tableId=tbl_001`.
+  2. The web-ordering helper normalizes `tableId` into `locationId` such as `loc_tbl_001`.
+  3. Web ordering fetches menu and locations.
+  4. The active context resolver looks up the matching TABLE location.
+  5. If the location has an open active session, the page becomes orderable and shows the table context.
+  6. If the location has no open session, the page stays in dine-in mode but blocks ordering and tells the guest to ask staff to open the table session.
+  7. Customer builds a cart from real menu data.
+  8. Customer submits `POST /v1/orders` with `restaurantId`, `locationId`, `tableId`, `sessionId`, `source=WEB_DINE_IN`, and `lines`.
+  9. Backend `CreateOrder` enforces that TABLE locations require an open session.
+  10. Backend creates the order, appends `ORDER_PLACED`, and publishes `order.placed`.
+  11. The web-ordering page shows the created order and refreshes recent table orders from `GET /v1/restaurants/{restaurant_id}/tables/{table_id}/orders?status=ALL&limit=50`.
+- Current status (complete / partial / broken / missing)
+  Partial.
+- Boundary problems
+  Web Ordering should own customer dine-in ordering.
+  Staff Console should own session opening and closing, not customer ordering.
+  Kitchen Display should never own dine-in entry.
+  Current surface ownership is mostly correct.
+  The backend/domain boundary is not fully clean because recent dine-in history still depends on legacy table routes instead of generic location history.
+- Gaps/blockers
+  There is no real QR generation or signed token model yet. URL table context is only a foundation.
+  Dine-in history uses legacy table routes, not the new location/session model directly.
+  If staff forgets to open the session, the customer can do nothing except see the block message.
+  The support override for manual table entry still exists, which is useful for development but proves the scan system is not complete.
+  Browser tests for this flow are mocked, not live against the backend.
+- Max 1 frontend integration test
+  Browser test against a live local backend: open web ordering at `?mode=dine-in&tableId=tbl_001`, verify the table session is open, add one seeded item, place the order, and verify recent table orders show that exact order.
+- Max 1 backend integration test
+  API test: create a dine-in order against `loc_tbl_001` with an open session and assert success, then repeat against the same table with no open session and assert `SESSION_REQUIRED`.
+
+- Name
+  Front-of-house operations: staff console occupancy and service follow-through
+- Goal
+  Let host or service staff see the floor, open and close table occupancy, inspect table detail, and move service-owned order steps from READY to SERVED to SETTLED.
+- Surfaces involved
+  Staff Console
+- Backend/domain objects involved
+  Location
+  Session
+  Table projection
+  Table summary
+  Order
+  OrderEvent
+- Step-by-step flow
+  1. Staff Console loads `GET /v1/restaurants/rst_001/locations?is_active=true` and `GET /v1/restaurants/rst_001/tables?status=ALL&limit=200`.
+  2. The UI merges locations with the legacy table registry into one floor model.
+  3. Operator works in `ENTRANCE` or `SERVICE` mode.
+  4. Operator selects a table location.
+  5. Detail pane fetches `GET /v1/restaurants/rst_001/tables/{table_id}/summary` and `GET /v1/restaurants/rst_001/tables/{table_id}/orders?status=ALL&limit=50`.
+  6. In entrance flow, operator uses `POST /v1/restaurants/{restaurant_id}/tables/{table_id}/open` to open occupancy and `POST /v1/restaurants/{restaurant_id}/tables/{table_id}/close` to close occupancy.
+  7. In service flow, operator uses `POST /v1/orders/{order_id}/served` and `POST /v1/orders/{order_id}/settled` for service follow-through.
+  8. Staff Console listens on websocket and merges table and order events back into the selected location and summary cards.
+- Current status (complete / partial / broken / missing)
+  Partial.
+- Boundary problems
+  Staff Console should own floor awareness, occupancy control, and service follow-through.
+  Kitchen Display should never own table open or close.
+  Restaurant Website should never expose internal floor operations.
+  Web Ordering should never expose served or settled actions.
+  The current UI boundary is mostly correct now.
+  The domain boundary is not correct enough yet because the Staff Console still talks about sessions but actually calls legacy table open and close routes instead of the newer session routes.
+- Gaps/blockers
+  The open and close flow is still table-route based, not truly session-route based.
+  Only TABLE locations are really actionable. BAR_SEAT and off-premise locations are mostly informational.
+  Waiter assignment is not persisted at all.
+  The close-table rule is operationally wrong. The backend only blocks close when there are `PLACED` or `ACCEPTED` orders. It does not block close when orders are `READY`, `SERVED`, or `SETTLED`. That means a table can be closed while food is merely ready or served.
+  Because detail data is still table-route based, the new unified location/session model is not fully driving this workflow yet.
+  Browser tests for this flow are mocked, not live against the backend.
+- Max 1 frontend integration test
+  Browser test against a live local backend: open Staff Console, open `tbl_002`, verify the floor and detail update to open, then select a READY order on `tbl_001`, mark it served, and verify the detail pane shows the updated status without any `Accept` or `Mark Ready` controls.
+- Max 1 backend integration test
+  API test: open a table, place an order, move it to READY, call `/served` and `/settled`, then verify `/v1/order-events` contains `ORDER_SERVED` and `ORDER_SETTLED`. Also verify close is blocked while READY exists, because that is the rule the product actually needs even though current code does not enforce it.
+
+- Name
+  Kitchen prep progression: kitchen display accept and ready flow
+- Goal
+  Let kitchen staff see active prep work, accept placed orders, and mark accepted orders ready.
+- Surfaces involved
+  Kitchen Display
+- Backend/domain objects involved
+  Order
+  OrderLine
+  Location or Table label
+  OrderEvent
+- Step-by-step flow
+  1. Kitchen Display loads `GET /v1/restaurants/rst_001/kitchen/orders?status=PLACED&limit=50`, `status=ACCEPTED`, and `status=READY`.
+  2. Orders are rendered into three lanes: placed, accepted, and ready.
+  3. Kitchen staff can inspect line items, modifiers, order total, location label, and age.
+  4. Kitchen staff clicks `Accept` for a placed order.
+  5. UI calls `POST /v1/orders/{order_id}/accept`.
+  6. Backend transitions the order to ACCEPTED, appends `ORDER_ACCEPTED`, publishes `order.accepted`, and the order moves to the accepted lane.
+  7. Kitchen staff clicks `Mark Ready` for an accepted order.
+  8. UI calls `POST /v1/orders/{order_id}/ready`.
+  9. Backend transitions the order to READY, appends `ORDER_READY`, publishes `order.ready`, and the order moves to the ready lane.
+  10. Kitchen Display listens on websocket and merges or removes orders as statuses change.
+- Current status (complete / partial / broken / missing)
+  Complete for the current MVP scope.
+- Boundary problems
+  Kitchen Display should own Accept and Ready.
+  Staff Console should never own Accept and Ready by default.
+  Restaurant Website and Web Ordering should never own prep progression.
+  Current UI boundary is correct.
+  The backend websocket boundary is still crude because all browser surfaces receive the same restaurant-wide events and filter client-side. That is not a surface-ownership violation, but it is not role-aware distribution.
+- Gaps/blockers
+  There is no reconnect strategy beyond showing disconnected state.
+  There is no item-level prep state. The kitchen flow is order-level only.
+  There is no explicit expo or handoff workflow beyond READY.
+  Current browser tests for this flow are mocked, not live against the backend.
+- Max 1 frontend integration test
+  Browser test against a live local backend: place a dine-in order through the real web-ordering surface, open Kitchen Display, accept it, mark it ready, and verify the lane transitions are visible without visiting the Staff Console.
+- Max 1 backend integration test
+  API test: create an order, call `/accept`, call `/ready`, then assert `/v1/order-events` contains `ORDER_ACCEPTED` and `ORDER_READY` and that `GET /v1/restaurants/rst_001/kitchen/orders?status=READY` returns the order.
+
+4. Final verdict
+- No, the current repo does not fully understand and implement the end-to-end workflows correctly yet.
+- It understands the product surface split much better than before. Kitchen is separated from Staff. Web Ordering is separated from the public site. That part is now directionally correct.
+- The misunderstanding is in the domain-to-workflow bridge.
+- The biggest misunderstanding is in the Staff Console workflow. The UI talks about sessions, but it still operates through legacy table open and close routes for the only real occupancy actions. That means the platform says `session` at the browser layer while still behaving like `table-open state` at the control layer.
+- The second misunderstanding is that delivery is treated as just another location source, not as a real delivery workflow. The UI can place a delivery-tagged order, but the actual delivery business flow is incomplete.
+- The third misunderstanding is that browser tests currently prove route and UI logic with mocked network handlers, not live browser-to-backend behavior. That means the branch is much closer, but still not proven end to end in the literal sense.
+- The specific backend flaw that most directly breaks workflow truth is the close-table rule. A table can currently be closed while orders are READY or SERVED because `CloseTable` only blocks on `PLACED` and `ACCEPTED`. That is operationally wrong and proves the workflow model is still not fully aligned.
+- The current branch understands 4 real workflows. It fully completes only 1 of them for current MVP scope: kitchen prep progression. The other 3 are real, usable, and materially implemented, but still partial.
