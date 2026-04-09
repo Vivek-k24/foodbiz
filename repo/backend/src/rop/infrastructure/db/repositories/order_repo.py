@@ -225,6 +225,35 @@ class SqlAlchemyOrderRepository(OrderRepository):
 
         return _page_orders(models, limit, self._to_domain)
 
+    def list_for_location(
+        self,
+        restaurant_id: RestaurantId,
+        location_id: LocationId,
+        status: OrderStatus | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[Order], str | None]:
+        statement = (
+            select(OrderModel)
+            .options(joinedload(OrderModel.lines))
+            .where(
+                OrderModel.restaurant_id == str(restaurant_id),
+                OrderModel.location_id == str(location_id),
+            )
+        )
+        if status is not None:
+            statement = statement.where(OrderModel.status == status.value)
+
+        statement = _apply_order_cursor(statement, cursor)
+        statement = statement.order_by(OrderModel.created_at.desc(), OrderModel.id.desc()).limit(
+            limit + 1
+        )
+
+        with Session(self._engine) as session:
+            models = list(session.execute(statement).unique().scalars().all())
+
+        return _page_orders(models, limit, self._to_domain)
+
     def summarize_for_table(
         self,
         restaurant_id: RestaurantId,

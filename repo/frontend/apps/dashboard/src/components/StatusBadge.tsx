@@ -50,3 +50,18 @@ export function locationTypeClass(type: LocationType): string {
       return "badge";
   }
 }
+
+export function locationTypeLabel(type: LocationType): string {
+  switch (type) {
+    case "TABLE":
+      return "Table";
+    case "BAR_SEAT":
+      return "Bar Seat";
+    case "ONLINE_PICKUP":
+      return "Pickup";
+    case "ONLINE_DELIVERY":
+      return "Delivery";
+    default:
+      return type.replace("_", " ");
+  }
+}

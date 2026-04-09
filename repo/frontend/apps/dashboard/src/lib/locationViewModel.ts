@@ -2,6 +2,7 @@ import { locationLabel, locationZoneSortValue, tableIdFromLocationId } from "./l
 import type {
   LocationCounts,
   LocationRecord,
+  OrderPayload,
   QueueSection,
   StaffLocation,
   StaffMode,
@@ -17,6 +18,62 @@ function emptyCounts(): LocationCounts {
     ready: 0,
     served: 0,
     settled: 0,
+  };
+}
+
+function summarizeLocationOrders(
+  locationId: string,
+  ordersById: Record<string, OrderPayload>
+): {
+  counts: LocationCounts;
+  amountCents: number;
+  currency: string;
+  lastOrderAt: string | null;
+} {
+  const counts = emptyCounts();
+  let amountCents = 0;
+  let currency = "USD";
+  let lastOrderAt: string | null = null;
+
+  for (const order of Object.values(ordersById)) {
+    if (order.locationId !== locationId) {
+      continue;
+    }
+
+    counts.ordersTotal += 1;
+    if (order.status === "PLACED") {
+      counts.placed += 1;
+    }
+    if (order.status === "ACCEPTED") {
+      counts.accepted += 1;
+    }
+    if (order.status === "READY") {
+      counts.ready += 1;
+    }
+    if (order.status === "SERVED") {
+      counts.served += 1;
+    }
+    if (order.status === "SETTLED") {
+      counts.settled += 1;
+    }
+
+    const totalMoney = order.totalMoney ?? order.total;
+    if (typeof totalMoney?.amountCents === "number") {
+      amountCents += totalMoney.amountCents;
+    }
+    if (typeof totalMoney?.currency === "string" && totalMoney.currency.trim()) {
+      currency = totalMoney.currency;
+    }
+    if (!lastOrderAt || new Date(order.createdAt).getTime() > new Date(lastOrderAt).getTime()) {
+      lastOrderAt = order.createdAt;
+    }
+  }
+
+  return {
+    counts,
+    amountCents,
+    currency,
+    lastOrderAt,
   };
 }
 
@@ -47,16 +104,21 @@ function deriveUiStatus(location: {
 
 export function buildStaffLocations(
   locationRows: LocationRecord[],
-  tableRows: Record<string, TableRegistryItem>
+  tableRows: Record<string, TableRegistryItem>,
+  ordersById: Record<string, OrderPayload>
 ): StaffLocation[] {
   return [...locationRows]
     .map((location, index) => {
       const backendTableId = location.type === "TABLE" ? tableIdFromLocationId(location.locationId) : null;
       const tableRow = backendTableId ? tableRows[backendTableId] : undefined;
-      const counts: LocationCounts = tableRow?.counts ?? emptyCounts();
+      const offPremiseSummary =
+        location.type === "ONLINE_PICKUP" || location.type === "ONLINE_DELIVERY"
+          ? summarizeLocationOrders(location.locationId, ordersById)
+          : null;
+      const counts: LocationCounts = tableRow?.counts ?? offPremiseSummary?.counts ?? emptyCounts();
       const manualOnly = location.type === "BAR_SEAT";
       const sessionOpen = location.sessionStatus === "OPEN" || tableRow?.status === "OPEN";
-      const lastOrderAt = tableRow?.lastOrderAt ?? null;
+      const lastOrderAt = tableRow?.lastOrderAt ?? offPremiseSummary?.lastOrderAt ?? null;
       const backendStatus = tableRow?.status === "OPEN" || tableRow?.status === "CLOSED" ? tableRow.status : location.sessionStatus;
 
       return {
@@ -77,7 +139,10 @@ export function buildStaffLocations(
         openedAt: location.lastSessionOpenedAt ?? tableRow?.openedAt ?? null,
         closedAt: tableRow?.closedAt ?? null,
         lastOrderAt,
-        totals: tableRow?.totals ?? { amountCents: 0, currency: "USD" },
+        totals: tableRow?.totals ?? {
+          amountCents: offPremiseSummary?.amountCents ?? 0,
+          currency: offPremiseSummary?.currency ?? "USD",
+        },
         counts,
         activeOrderIds: [],
         assignmentState: manualOnly

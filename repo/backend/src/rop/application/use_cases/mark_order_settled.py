@@ -12,6 +12,7 @@ from rop.application.ports.repositories import (
     OptimisticConcurrencyError,
     OrderEventRecord,
     OrderRepository,
+    SessionRepository,
 )
 from rop.application.use_cases.context import TraceContext
 from rop.domain.common.ids import OrderEventId, OrderId
@@ -32,9 +33,15 @@ class OrderConflictError(Exception):
 
 
 class MarkOrderSettled:
-    def __init__(self, order_repository: OrderRepository, publisher: EventPublisher) -> None:
+    def __init__(
+        self,
+        order_repository: OrderRepository,
+        publisher: EventPublisher,
+        session_repository: SessionRepository | None = None,
+    ) -> None:
         self._order_repository = order_repository
         self._publisher = publisher
+        self._session_repository = session_repository
 
     def execute(self, order_id: OrderId, trace_ctx: TraceContext) -> OrderResponse:
         order = self._order_repository.get(order_id)
@@ -107,6 +114,12 @@ class MarkOrderSettled:
         )
         record_transition(from_status=order.status, to_status=OrderStatus.SETTLED)
         record_order_status(persisted_order)
+        if (
+            self._session_repository is not None
+            and persisted_order.session_id is not None
+            and persisted_order.source in {OrderSource.ONLINE_PICKUP, OrderSource.ONLINE_DELIVERY}
+        ):
+            self._session_repository.close_session(persisted_order.session_id)
         try:
             self._publisher.publish(
                 channel=f"events:{persisted_order.restaurant_id}",

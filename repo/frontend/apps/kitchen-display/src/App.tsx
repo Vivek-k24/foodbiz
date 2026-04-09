@@ -118,7 +118,33 @@ function formatModifier(modifier: OrderLineModifier): string {
   return modifier.value === "true" ? modifier.label : `${modifier.label}: ${modifier.value}`;
 }
 
+function getOrderTypeLabel(order: OrderPayload): string {
+  if (order.source === "ONLINE_PICKUP" || order.locationId === "loc_online_pickup") {
+    return "Pickup";
+  }
+  if (order.source === "ONLINE_DELIVERY" || order.locationId === "loc_online_delivery") {
+    return "Delivery";
+  }
+  return "Dining Room";
+}
+
+function getOrderTypeClass(order: OrderPayload): string {
+  if (order.source === "ONLINE_PICKUP" || order.locationId === "loc_online_pickup") {
+    return "typeChip typeChipPickup";
+  }
+  if (order.source === "ONLINE_DELIVERY" || order.locationId === "loc_online_delivery") {
+    return "typeChip typeChipDelivery";
+  }
+  return "typeChip typeChipTable";
+}
+
 function getLocationLabel(order: OrderPayload): string {
+  if (order.source === "ONLINE_PICKUP" || order.locationId === "loc_online_pickup") {
+    return "Pickup Counter";
+  }
+  if (order.source === "ONLINE_DELIVERY" || order.locationId === "loc_online_delivery") {
+    return "Delivery Dispatch";
+  }
   if (order.tableId?.trim()) {
     return order.tableId;
   }
@@ -416,6 +442,7 @@ function App() {
                           <p className="metaLine">{getLocationLabel(order)}</p>
                         </div>
                         <div className="metaGroup">
+                          <span className={getOrderTypeClass(order)}>{getOrderTypeLabel(order)}</span>
                           <span className={`statusChip statusChip${lane}`}>{order.status}</span>
                           <span className="ageChip">{formatRelativeAge(order.createdAt)}</span>
                         </div>

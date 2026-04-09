@@ -14,6 +14,14 @@
   --text: #141414;
   --text-muted: #5f5f5f;
   --shadow: 0 16px 40px rgba(0, 0, 0, 0.08);
+  --status-placed: #f59e0b;
+  --status-accepted: #2563eb;
+  --status-ready: #7c3aed;
+  --status-served: #16a34a;
+  --status-settled: #5f7162;
+  --status-cancelled: #dc2626;
+  --type-pickup: #f97316;
+  --type-delivery: #4f46e5;
 }
 
 * {
@@ -304,37 +312,75 @@ button {
   color: #2b2b2b;
 }
 
-.badgeTypeTable,
-.badgeLocationAvailable,
-.badgeOrderPlaced {
-  background: #f2f2f2;
+.badgeTypeTable {
+  background: #f8fafc;
+  border-color: #cbd5e1;
 }
 
-.badgeTypeBar,
-.badgeLocationOccupied,
-.badgeOrderAccepted,
+.badgeTypeBar {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
+
 .badgeTypePickup {
-  background: #dfdfdf;
+  background: rgba(249, 115, 22, 0.14);
+  border-color: rgba(249, 115, 22, 0.45);
+  color: #9a3412;
 }
 
-.badgeTypeDelivery,
+.badgeTypeDelivery {
+  background: rgba(79, 70, 229, 0.14);
+  border-color: rgba(79, 70, 229, 0.45);
+  color: #3730a3;
+}
+
+.badgeLocationAvailable {
+  background: #ecfdf5;
+  border-color: #6ee7b7;
+  color: #166534;
+}
+
+.badgeLocationOccupied {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+}
+
 .badgeLocationOrdering,
-.badgeOrderReady,
-.badgeLocationTurnover {
-  background: #c8c8c8;
+.badgeOrderAccepted {
+  background: rgba(37, 99, 235, 0.14);
+  border-color: rgba(37, 99, 235, 0.45);
+  color: #1d4ed8;
 }
 
 .badgeLocationAttention,
-.badgeOrderServed,
-.badgeLocationManual {
-  background: #9f9f9f;
-  border-color: #7d7d7d;
+.badgeOrderReady {
+  background: rgba(124, 58, 237, 0.14);
+  border-color: rgba(124, 58, 237, 0.45);
+  color: #6d28d9;
 }
 
+.badgeLocationTurnover,
 .badgeOrderSettled {
-  background: #575757;
-  border-color: #444444;
-  color: #ffffff;
+  background: rgba(95, 113, 98, 0.18);
+  border-color: rgba(95, 113, 98, 0.45);
+  color: #365043;
+}
+
+.badgeLocationManual {
+  background: #f5f5f4;
+  border-color: #a8a29e;
+}
+
+.badgeOrderPlaced {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.48);
+  color: #b45309;
+}
+
+.badgeOrderServed {
+  background: rgba(22, 163, 74, 0.14);
+  border-color: rgba(22, 163, 74, 0.44);
+  color: #166534;
 }
 
 .consoleShell {
@@ -420,27 +466,27 @@ button {
 
 .queueItemAvailable,
 .locationTileAvailable {
-  background: #fbfbfb;
+  background: #f0fdf4;
 }
 
 .queueItemOccupied,
 .locationTileOccupied {
-  background: #f0f0f0;
+  background: #f8fafc;
 }
 
 .queueItemOrdering,
 .locationTileOrdering {
-  background: #e4e4e4;
+  background: rgba(37, 99, 235, 0.08);
 }
 
 .queueItemAttention,
 .locationTileAttention {
-  background: #d0d0d0;
+  background: rgba(124, 58, 237, 0.1);
 }
 
 .queueItemTurnover,
 .locationTileTurnover {
-  background: #dadada;
+  background: rgba(95, 113, 98, 0.12);
 }
 
 .queueItemManual,
@@ -459,27 +505,27 @@ button {
 
 .locationStatusRailAvailable,
 .queueStatusRailAvailable {
-  background: #e7e7e7;
+  background: #22c55e;
 }
 
 .locationStatusRailOccupied,
 .queueStatusRailOccupied {
-  background: #cfcfcf;
+  background: #64748b;
 }
 
 .locationStatusRailOrdering,
 .queueStatusRailOrdering {
-  background: #a8a8a8;
+  background: var(--status-accepted);
 }
 
 .locationStatusRailAttention,
 .queueStatusRailAttention {
-  background: #666666;
+  background: var(--status-ready);
 }
 
 .locationStatusRailTurnover,
 .queueStatusRailTurnover {
-  background: #b7b7b7;
+  background: var(--status-settled);
 }
 
 .locationStatusRailManual,

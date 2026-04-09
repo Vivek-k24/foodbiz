@@ -79,6 +79,15 @@ export async function fetchLocationOrders(tableId: string): Promise<OrderPayload
   return payload.orders.map(normalizeOrder);
 }
 
+export async function fetchOrdersByLocation(locationId: string): Promise<OrderPayload[]> {
+  const payload = await fetchJson<TableOrdersResponse>(
+    `${apiBaseUrl}/v1/restaurants/${restaurantId}/locations/${encodeURIComponent(
+      locationId
+    )}/orders?status=ALL&limit=50`
+  );
+  return payload.orders.map(normalizeOrder);
+}
+
 export async function fetchLocationSummary(tableId: string): Promise<TableSummaryResponse> {
   return fetchJson<TableSummaryResponse>(
     `${apiBaseUrl}/v1/restaurants/${restaurantId}/tables/${encodeURIComponent(tableId)}/summary`

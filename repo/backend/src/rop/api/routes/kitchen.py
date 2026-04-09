@@ -13,6 +13,7 @@ from rop.application.use_cases.mark_order_served import MarkOrderServed
 from rop.application.use_cases.mark_order_settled import MarkOrderSettled
 from rop.domain.common.ids import OrderId, RestaurantId
 from rop.infrastructure.db.repositories.order_repo import SqlAlchemyOrderRepository
+from rop.infrastructure.db.repositories.session_repo import SqlAlchemySessionRepository
 from rop.infrastructure.messaging.redis_publisher import RedisEventPublisher
 
 router = APIRouter()
@@ -50,6 +51,7 @@ def _mark_order_settled_use_case() -> MarkOrderSettled:
     return MarkOrderSettled(
         order_repository=SqlAlchemyOrderRepository(),
         publisher=RedisEventPublisher(),
+        session_repository=SqlAlchemySessionRepository(),
     )
 
 

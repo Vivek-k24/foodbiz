@@ -49,6 +49,13 @@ from rop.application.use_cases.list_tables import (
     InvalidTableRegistryStatusError,
     RestaurantNotFoundError,
 )
+from rop.application.use_cases.location_orders import (
+    InvalidLocationOrdersCursorError,
+    InvalidLocationOrdersStatusError,
+)
+from rop.application.use_cases.location_orders import (
+    LocationNotFoundError as LocationOrdersLocationNotFoundError,
+)
 from rop.application.use_cases.locations import InvalidLocationFilterError
 from rop.application.use_cases.mark_order_ready import (
     InvalidOrderTransitionError as ReadyInvalidOrderTransitionError,
@@ -174,6 +181,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         (ServedOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (SettledOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
         (CreateOrderLocationNotFoundError, 404, "LOCATION_NOT_FOUND"),
+        (LocationOrdersLocationNotFoundError, 404, "LOCATION_NOT_FOUND"),
         (SessionLocationNotFoundError, 404, "LOCATION_NOT_FOUND"),
         (SessionNotFoundError, 404, "SESSION_NOT_FOUND"),
         (GetTableNotFoundError, 404, "TABLE_NOT_FOUND"),
@@ -232,6 +240,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         (InvalidTableOrdersStatusError, 400, "INVALID_TABLE_ORDERS_STATUS"),
         (InvalidTableOrdersCursorError, 400, "INVALID_TABLE_ORDERS_CURSOR"),
         (InvalidLocationFilterError, 400, "INVALID_LOCATION_FILTER"),
+        (InvalidLocationOrdersStatusError, 400, "INVALID_LOCATION_ORDERS_STATUS"),
+        (InvalidLocationOrdersCursorError, 400, "INVALID_LOCATION_ORDERS_CURSOR"),
         (InvalidSessionFilterError, 400, "INVALID_SESSION_FILTER"),
     ]
 

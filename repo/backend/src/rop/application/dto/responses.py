@@ -105,6 +105,11 @@ class TableOrdersResponse(BaseModel):
     nextCursor: str | None = None
 
 
+class LocationOrdersResponse(BaseModel):
+    orders: list[OrderResponse] = Field(default_factory=list)
+    nextCursor: str | None = None
+
+
 class TableSummaryCountsResponse(BaseModel):
     ordersTotal: int
     placed: int

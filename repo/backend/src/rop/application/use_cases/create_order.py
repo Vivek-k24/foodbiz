@@ -103,9 +103,13 @@ class CreateOrder:
         if location is None:
             raise LocationNotFoundError(f"location {location_id} not found")
 
-        table_id = _resolve_table_id(request_dto.table_id, location_id)
+        is_off_premise = location.location_type in {
+            LocationType.ONLINE_PICKUP,
+            LocationType.ONLINE_DELIVERY,
+        }
+        table_id = None if is_off_premise else _resolve_table_id(request_dto.table_id, location_id)
         session_id = SessionId(request_dto.session_id) if request_dto.session_id else None
-        if session_id is None:
+        if not is_off_premise and session_id is None:
             active_session = self._session_repository.get_active_for_location(
                 restaurant_id=restaurant_id,
                 location_id=location_id,
@@ -154,6 +158,21 @@ class CreateOrder:
                     modifiers=_validated_modifiers(menu_item, request_line.modifiers),
                 )
             )
+
+        if is_off_premise:
+            create_internal_session = getattr(
+                self._session_repository,
+                "create_internal_session",
+                None,
+            )
+            if not callable(create_internal_session):
+                raise RuntimeError("session repository does not support internal sessions")
+            session_id = create_internal_session(
+                restaurant_id=restaurant_id,
+                location_id=location_id,
+                opened_by_source=source.value,
+                notes="auto-created for off-premise order",
+            ).session_id
 
         now = datetime.now(timezone.utc)
         payload_hash = _request_hash(request_dto)

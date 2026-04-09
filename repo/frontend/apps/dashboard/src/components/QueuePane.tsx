@@ -1,6 +1,6 @@
 import { formatMoneyValue, formatTimestamp } from "../lib/formatting";
 import type { QueueSection, StaffMode } from "../lib/types";
-import { locationStatusClass, locationTypeClass } from "./StatusBadge";
+import { locationStatusClass, locationTypeClass, locationTypeLabel } from "./StatusBadge";
 
 type QueuePaneProps = {
   mode: StaffMode;
@@ -62,7 +62,7 @@ export function QueuePane({
                           <div className="queueItemTitle">{location.label}</div>
                           <p className="mutedLine">{location.zone}</p>
                         </div>
-                        <span className={locationTypeClass(location.type)}>{location.type.replace("_", " ")}</span>
+                        <span className={locationTypeClass(location.type)}>{locationTypeLabel(location.type)}</span>
                       </div>
                       <div className="queueItemMeta">
                         <span className={locationStatusClass(location.uiStatus)}>{location.uiStatus}</span>

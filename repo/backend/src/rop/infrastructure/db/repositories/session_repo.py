@@ -55,6 +55,30 @@ class SqlAlchemySessionRepository(SessionRepository):
             session.refresh(model)
             return self._to_domain(model)
 
+    def create_internal_session(
+        self,
+        restaurant_id: RestaurantId,
+        location_id: LocationId,
+        opened_by_source: str | None,
+        notes: str | None,
+    ) -> Session:
+        with OrmSession(self._engine) as session:
+            model = SessionModel(
+                id=f"ses_{uuid4().hex[:12]}",
+                restaurant_id=str(restaurant_id),
+                location_id=str(location_id),
+                status=SessionStatus.OPEN.value,
+                opened_at=datetime.now(timezone.utc),
+                closed_at=None,
+                opened_by_role_id=None,
+                opened_by_source=opened_by_source,
+                notes=notes,
+            )
+            session.add(model)
+            session.commit()
+            session.refresh(model)
+            return self._to_domain(model)
+
     def close_session(self, session_id: SessionId) -> Session | None:
         with OrmSession(self._engine) as session:
             model = session.execute(

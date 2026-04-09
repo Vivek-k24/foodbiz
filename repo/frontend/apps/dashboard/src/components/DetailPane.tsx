@@ -1,6 +1,11 @@
 import { formatModifierValue, formatMoneyValue, formatTimestamp, getOrderMoney } from "../lib/formatting";
 import type { OrderAction, OrderPayload, StaffLocation, StaffMode, TableSummaryResponse } from "../lib/types";
-import { locationStatusClass, locationTypeClass, orderStatusClass } from "./StatusBadge";
+import {
+  locationStatusClass,
+  locationTypeClass,
+  locationTypeLabel,
+  orderStatusClass,
+} from "./StatusBadge";
 
 function orderActionForStatus(status: string): { action: OrderAction; label: string } | null {
   switch (status) {
@@ -90,7 +95,7 @@ export function DetailPane({
               <p className="mutedLine monoLine">{location.locationId}</p>
             </div>
             <div className="badgeRow">
-              <span className={locationTypeClass(location.type)}>{location.type.replace("_", " ")}</span>
+              <span className={locationTypeClass(location.type)}>{locationTypeLabel(location.type)}</span>
               <span className={locationStatusClass(location.uiStatus)}>{location.uiStatus}</span>
             </div>
           </div>
@@ -139,8 +144,8 @@ export function DetailPane({
 
         {location.type === "ONLINE_PICKUP" || location.type === "ONLINE_DELIVERY" ? (
           <div className="infoBox">
-            Off-premise locations are modeled in the platform foundation, but the staff console does not
-            currently manage them as seat-based service sessions.
+            Off-premise fulfillment uses hidden internal sessions. Staff follows these orders through
+            Served and Settled here without exposing kitchen Accept or Ready controls.
           </div>
         ) : null}
 

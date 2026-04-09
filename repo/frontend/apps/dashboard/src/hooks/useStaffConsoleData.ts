@@ -4,6 +4,7 @@ import {
   advanceOrder,
   buildStaffConsoleWsUrl,
   closeLocation,
+  fetchOrdersByLocation,
   fetchLocationOrders,
   fetchLocations,
   fetchLocationSummary,
@@ -150,8 +151,8 @@ export function useStaffConsoleData() {
   }, [ordersById]);
 
   const locations = useMemo(
-    () => buildStaffLocations(locationRows, tableRows),
-    [locationRows, tableRows]
+    () => buildStaffLocations(locationRows, tableRows, ordersById),
+    [locationRows, tableRows, ordersById]
   );
   const filteredLocations = useMemo(
     () => filterLocations(locations, search, typeFilter, statusFilter),
@@ -224,6 +225,20 @@ export function useStaffConsoleData() {
       setLocationRows(locationsPayload.locations);
       const nextRows = mapTableRows(tableRegistryPayload.tables);
       setTableRows(nextRows);
+      const offPremiseOrders = await Promise.allSettled(
+        locationsPayload.locations
+          .filter(
+            (location) =>
+              location.type === "ONLINE_PICKUP" || location.type === "ONLINE_DELIVERY"
+          )
+          .map((location) => fetchOrdersByLocation(location.locationId))
+      );
+      const mergedOffPremiseOrders = offPremiseOrders.flatMap((result) =>
+        result.status === "fulfilled" ? result.value : []
+      );
+      if (mergedOffPremiseOrders.length > 0) {
+        mergeOrders(mergedOffPremiseOrders);
+      }
       return locationsPayload.locations;
     } catch (error) {
       setRegistryError(error instanceof Error ? error.message : "failed to load staff console data");
@@ -239,6 +254,28 @@ export function useStaffConsoleData() {
   ): Promise<void> {
     const location = availableLocations.find((row) => row.locationId === locationId) ?? null;
     const tableId = location?.type === "TABLE" ? locationId.replace(/^loc_/, "") : null;
+
+    if (!location) {
+      setSelectedSummary(null);
+      setDetailError(null);
+      return;
+    }
+
+    if (location.type === "ONLINE_PICKUP" || location.type === "ONLINE_DELIVERY") {
+      setDetailLoading(true);
+      setDetailError(null);
+      try {
+        const orders = await fetchOrdersByLocation(location.locationId);
+        mergeOrders(orders);
+        setSelectedSummary(null);
+      } catch (error) {
+        setSelectedSummary(null);
+        setDetailError(error instanceof Error ? error.message : "failed to load location detail");
+      } finally {
+        setDetailLoading(false);
+      }
+      return;
+    }
 
     if (!tableId) {
       setSelectedSummary(null);
@@ -338,7 +375,10 @@ export function useStaffConsoleData() {
     try {
       const updated = await advanceOrder(order.orderId, action);
       mergeOrders([updated]);
-      if (selectedLocation?.backendTableId && updated.tableId === selectedLocation.backendTableId) {
+      if (
+        (selectedLocation?.backendTableId && updated.tableId === selectedLocation.backendTableId) ||
+        (!selectedLocation?.backendTableId && updated.locationId === selectedLocation?.locationId)
+      ) {
         await loadSelectedLocationData(selectedLocation.locationId);
       }
     } catch (error) {

@@ -13,6 +13,11 @@
   --text: #111111;
   --text-muted: #616161;
   --shadow: 0 16px 34px rgba(0, 0, 0, 0.08);
+  --status-placed: #f59e0b;
+  --status-accepted: #2563eb;
+  --status-ready: #7c3aed;
+  --type-pickup: #f97316;
+  --type-delivery: #4f46e5;
 }
 
 * {
@@ -216,15 +221,15 @@ button {
 }
 
 .lanePLACED .laneHeader {
-  background: linear-gradient(180deg, #f7f7f7 0%, #f1f1f1 100%);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.18) 0%, rgba(245, 158, 11, 0.08) 100%);
 }
 
 .laneACCEPTED .laneHeader {
-  background: linear-gradient(180deg, #ececec 0%, #dfdfdf 100%);
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.18) 0%, rgba(37, 99, 235, 0.08) 100%);
 }
 
 .laneREADY .laneHeader {
-  background: linear-gradient(180deg, #dbdbdb 0%, #cbcbcb 100%);
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.18) 0%, rgba(124, 58, 237, 0.08) 100%);
 }
 
 .laneScroll {
@@ -246,18 +251,18 @@ button {
 }
 
 .orderCardPLACED {
-  border-left-color: #d8d8d8;
-  background: #fbfbfb;
+  border-left-color: var(--status-placed);
+  background: rgba(245, 158, 11, 0.06);
 }
 
 .orderCardACCEPTED {
-  border-left-color: #a9a9a9;
-  background: #f0f0f0;
+  border-left-color: var(--status-accepted);
+  background: rgba(37, 99, 235, 0.06);
 }
 
 .orderCardREADY {
-  border-left-color: #656565;
-  background: #e0e0e0;
+  border-left-color: var(--status-ready);
+  background: rgba(124, 58, 237, 0.07);
 }
 
 .cardHeader {
@@ -272,21 +277,57 @@ button {
 }
 
 .statusChipPLACED {
-  background: #f1f1f1;
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #b45309;
 }
 
 .statusChipACCEPTED {
-  background: #d7d7d7;
+  background: rgba(37, 99, 235, 0.16);
+  border-color: rgba(37, 99, 235, 0.45);
+  color: #1d4ed8;
 }
 
 .statusChipREADY {
-  background: #8b8b8b;
-  border-color: #666666;
-  color: #111111;
+  background: rgba(124, 58, 237, 0.16);
+  border-color: rgba(124, 58, 237, 0.45);
+  color: #6d28d9;
 }
 
 .ageChip {
   background: #ffffff;
+}
+
+.typeChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #f8fafc;
+}
+
+.typeChipPickup {
+  background: rgba(249, 115, 22, 0.14);
+  border-color: rgba(249, 115, 22, 0.45);
+  color: #9a3412;
+}
+
+.typeChipDelivery {
+  background: rgba(79, 70, 229, 0.14);
+  border-color: rgba(79, 70, 229, 0.45);
+  color: #3730a3;
+}
+
+.typeChipTable {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #334155;
 }
 
 .metaRow {

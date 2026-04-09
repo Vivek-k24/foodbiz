@@ -186,8 +186,10 @@ export function resolveActiveContext(
       locationId: deliveryLocation?.locationId ?? null,
       tableId: null,
       sessionId: null,
-      label: deliveryLocation?.displayLabel ?? "Online Delivery",
-      subtitle: "Delivery ordering uses an off-premise location context instead of a dining session.",
+      label: "Delivery Order",
+      subtitle: `Delivery ordering routes through ${
+        deliveryLocation?.displayLabel ?? "the delivery dispatch lane"
+      } instead of a dining-room session.`,
       scanSource: false,
       orderable: deliveryLocation !== null,
       orderableMessage: deliveryLocation
@@ -201,8 +203,10 @@ export function resolveActiveContext(
     locationId: pickupLocation?.locationId ?? null,
     tableId: null,
     sessionId: null,
-    label: pickupLocation?.displayLabel ?? "Online Pickup",
-    subtitle: "Pickup ordering stays customer-facing and separate from internal staff workflows.",
+    label: "Pickup Order",
+    subtitle: `Pickup ordering routes through ${
+      pickupLocation?.displayLabel ?? "the pickup counter"
+    } and stays separate from internal staff workflows.`,
     scanSource: false,
     orderable: pickupLocation !== null,
     orderableMessage: pickupLocation

@@ -17,6 +17,7 @@ from rop.api.middleware.request_id import RequestIDMiddleware
 from rop.api.routes.health import router as health_router
 from rop.api.routes.inventory import router as inventory_router
 from rop.api.routes.kitchen import router as kitchen_router
+from rop.api.routes.location_orders import router as location_orders_router
 from rop.api.routes.locations import router as locations_router
 from rop.api.routes.menu import router as menu_router
 from rop.api.routes.metrics import router as metrics_router
@@ -120,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(metrics_router)
     app.include_router(restaurants_router)
     app.include_router(locations_router)
+    app.include_router(location_orders_router)
     app.include_router(sessions_router)
     app.include_router(menu_router)
     app.include_router(roles_router)

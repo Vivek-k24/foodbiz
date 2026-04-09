@@ -1,6 +1,6 @@
 import { formatMoneyValue, formatTimestamp } from "../lib/formatting";
 import type { StaffLocation } from "../lib/types";
-import { locationStatusClass, locationTypeClass } from "./StatusBadge";
+import { locationStatusClass, locationTypeClass, locationTypeLabel } from "./StatusBadge";
 
 type FloorPaneProps = {
   groupedLocations: Array<{
@@ -61,7 +61,7 @@ export function FloorPane({
                         <div className="locationTileTitle">{location.label}</div>
                         <p className="mutedLine monoLine">{location.locationId}</p>
                       </div>
-                      <span className={locationTypeClass(location.type)}>{location.type.replace("_", " ")}</span>
+                      <span className={locationTypeClass(location.type)}>{locationTypeLabel(location.type)}</span>
                     </div>
 
                     <div className="locationTileMeta">

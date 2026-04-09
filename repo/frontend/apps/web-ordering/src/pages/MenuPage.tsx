@@ -358,6 +358,15 @@ export function MenuPage() {
         : null,
     [activeContext.tableId]
   );
+  const locationOrdersEndpoint = useMemo(
+    () =>
+      !activeContext.tableId && activeContext.locationId
+        ? `${apiBaseUrl}/v1/restaurants/${restaurantId}/locations/${encodeURIComponent(
+            activeContext.locationId
+          )}/orders?status=ALL&limit=50`
+        : null,
+    [activeContext.locationId, activeContext.tableId]
+  );
   const wsUrl = useMemo(() => {
     const url = new URL("/ws", wsBaseUrl);
     url.searchParams.set("restaurant_id", restaurantId);
@@ -402,14 +411,15 @@ export function MenuPage() {
   }
 
   async function loadTableOrders(): Promise<void> {
-    if (!tableOrdersEndpoint) {
+    const ordersEndpoint = tableOrdersEndpoint ?? locationOrdersEndpoint;
+    if (!ordersEndpoint) {
       setTableOrders({});
       return;
     }
     setOrdersLoading(true);
     setOrdersError(null);
     try {
-      const response = await fetch(tableOrdersEndpoint);
+      const response = await fetch(ordersEndpoint);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
@@ -470,7 +480,7 @@ export function MenuPage() {
   useEffect(() => {
     setOrderResult(null);
     void loadTableOrders();
-  }, [tableOrdersEndpoint]);
+  }, [locationOrdersEndpoint, tableOrdersEndpoint]);
 
   useEffect(() => {
     const socket = new WebSocket(wsUrl);
@@ -773,7 +783,7 @@ export function MenuPage() {
           <section className="card">
             <div className="cardHeader">
               <div>
-                <h2 className="sectionTitle">Cart</h2>
+                <h2 className="sectionTitle">Cart & Checkout</h2>
                 <p className="hint">
                   Each line keeps its own quantity, notes, and item-specific modifiers.
                 </p>
@@ -962,22 +972,20 @@ export function MenuPage() {
                 <p className="hint">
                   {activeContext.tableId
                     ? `Hydrated from the live table history for ${activeContext.tableId}.`
-                    : "Off-premise history listing is not exposed as a generic endpoint yet."}
+                    : `Hydrated from the live ${activeContext.mode === "ONLINE_PICKUP" ? "pickup" : "delivery"} location queue.`}
                 </p>
               </div>
               <span className="badge">{orderedTableOrders.length} orders</span>
             </div>
             <div className="cardBody">
-              {!activeContext.tableId ? (
-                <div className="infoBox">
-                  This surface can place pickup and delivery orders through the new location-aware
-                  API, but the current backend only exposes list history for table-backed locations.
-                </div>
-              ) : null}
               {ordersLoading ? <div className="infoBox">Loading orders...</div> : null}
               {ordersError ? <div className="errorBox">{ordersError}</div> : null}
-              {activeContext.tableId && !ordersLoading && orderedTableOrders.length === 0 ? (
-                <div className="emptyState">No orders yet for this table.</div>
+              {!ordersLoading && orderedTableOrders.length === 0 ? (
+                <div className="emptyState">
+                  {activeContext.mode === "DINE_IN"
+                    ? "No orders yet for this table."
+                    : "No recent orders yet for this fulfillment lane."}
+                </div>
               ) : null}
 
               <div className="listStack">
