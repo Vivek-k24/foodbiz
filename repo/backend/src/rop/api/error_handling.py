@@ -8,106 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from rop.api.middleware.request_id import get_request_id
-from rop.application.use_cases.accept_order import (
-    InvalidOrderTransitionError as AcceptInvalidOrderTransitionError,
-)
-from rop.application.use_cases.accept_order import OrderConflictError as AcceptOrderConflictError
-from rop.application.use_cases.accept_order import OrderNotFoundError as AcceptOrderNotFoundError
-from rop.application.use_cases.close_table import TableCloseBlockedError, TableNotOpenForCloseError
-from rop.application.use_cases.create_order import (
-    IdempotencyReplayMismatchError as CreateOrderIdempotencyReplayMismatchError,
-)
-from rop.application.use_cases.create_order import (
-    InvalidModifierError as CreateOrderInvalidModifierError,
-)
-from rop.application.use_cases.create_order import (
-    InvalidModifierValueError as CreateOrderInvalidModifierValueError,
-)
-from rop.application.use_cases.create_order import (
-    InvalidOrderSourceError as CreateOrderInvalidOrderSourceError,
-)
-from rop.application.use_cases.create_order import (
-    LocationNotFoundError as CreateOrderLocationNotFoundError,
-)
-from rop.application.use_cases.create_order import (
-    MenuItemUnavailableError as CreateOrderMenuItemUnavailableError,
-)
-from rop.application.use_cases.create_order import (
-    MenuNotFoundError as CreateOrderMenuNotFoundError,
-)
-from rop.application.use_cases.create_order import (
-    SessionRequiredError as CreateOrderSessionRequiredError,
-)
-from rop.application.use_cases.get_menu import MenuNotFoundError as GetMenuNotFoundError
-from rop.application.use_cases.get_order import OrderNotFoundError as GetOrderNotFoundError
-from rop.application.use_cases.kitchen_queue import (
-    InvalidKitchenQueueCursorError,
-    InvalidKitchenQueueStatusError,
-)
-from rop.application.use_cases.list_tables import (
-    InvalidTableRegistryCursorError,
-    InvalidTableRegistryStatusError,
-    RestaurantNotFoundError,
-)
-from rop.application.use_cases.location_orders import (
-    InvalidLocationOrdersCursorError,
-    InvalidLocationOrdersStatusError,
-)
-from rop.application.use_cases.location_orders import (
-    LocationNotFoundError as LocationOrdersLocationNotFoundError,
-)
-from rop.application.use_cases.locations import InvalidLocationFilterError
-from rop.application.use_cases.mark_order_ready import (
-    InvalidOrderTransitionError as ReadyInvalidOrderTransitionError,
-)
-from rop.application.use_cases.mark_order_ready import (
-    OrderConflictError as ReadyOrderConflictError,
-)
-from rop.application.use_cases.mark_order_ready import OrderNotFoundError as ReadyOrderNotFoundError
-from rop.application.use_cases.mark_order_served import (
-    InvalidOrderTransitionError as ServedInvalidOrderTransitionError,
-)
-from rop.application.use_cases.mark_order_served import (
-    OrderConflictError as ServedOrderConflictError,
-)
-from rop.application.use_cases.mark_order_served import (
-    OrderNotFoundError as ServedOrderNotFoundError,
-)
-from rop.application.use_cases.mark_order_settled import (
-    InvalidOrderTransitionError as SettledInvalidOrderTransitionError,
-)
-from rop.application.use_cases.mark_order_settled import (
-    OrderConflictError as SettledOrderConflictError,
-)
-from rop.application.use_cases.mark_order_settled import (
-    OrderNotFoundError as SettledOrderNotFoundError,
-)
-from rop.application.use_cases.open_table import TableNotFoundError as GetTableNotFoundError
-from rop.application.use_cases.place_order import (
-    IdempotencyReplayMismatchError,
-    InvalidModifierError,
-    InvalidModifierValueError,
-    InvalidOrderSourceError,
-    MenuItemUnavailableError,
-    TableNotOpenError,
-)
-from rop.application.use_cases.place_order import (
-    MenuNotFoundError as PlaceOrderMenuNotFoundError,
-)
-from rop.application.use_cases.place_order import (
-    TableNotFoundError as PlaceOrderTableNotFoundError,
-)
-from rop.application.use_cases.sessions import (
-    InvalidSessionFilterError,
-    SessionNotFoundError,
-)
-from rop.application.use_cases.sessions import (
-    LocationNotFoundError as SessionLocationNotFoundError,
-)
-from rop.application.use_cases.table_orders import (
-    InvalidTableOrdersCursorError,
-    InvalidTableOrdersStatusError,
-)
+from rop.domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
 
 
 def _error_response(
@@ -120,43 +21,42 @@ def _error_response(
     return JSONResponse(
         status_code=status_code,
         content={
-            "error": {
-                "code": code,
-                "message": message,
-                "details": details or {},
-            },
+            "error": {"code": code, "message": message, "details": details or {}},
             "requestId": get_request_id(),
         },
     )
 
 
-def _exception_handler(status_code: int, code: str):
-    async def handler(_: Request, exc: Exception) -> JSONResponse:
-        details = getattr(exc, "details", None)
-        return _error_response(
-            status_code=status_code,
-            code=code,
-            message=str(exc),
-            details=details if isinstance(details, dict) else None,
-        )
-
-    return handler
+async def _domain_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    domain_exc = cast(DomainError, exc)
+    status_code = 400
+    if isinstance(domain_exc, NotFoundError):
+        status_code = 404
+    elif isinstance(domain_exc, ConflictError):
+        status_code = 409
+    elif isinstance(domain_exc, ValidationError):
+        status_code = 400
+    return _error_response(
+        status_code=status_code,
+        code=domain_exc.code,
+        message=str(domain_exc),
+        details=domain_exc.details,
+    )
 
 
 async def _http_exception_handler(_: Request, exc: Exception) -> JSONResponse:
     http_exc = cast(StarletteHTTPException, exc)
-    message = str(http_exc.detail) if http_exc.detail else "request failed"
-    code = "HTTP_ERROR"
+    default_code = "HTTP_ERROR"
     if http_exc.status_code == 404:
-        code = "NOT_FOUND"
-    elif http_exc.status_code == 400:
-        code = "BAD_REQUEST"
+        default_code = "NOT_FOUND"
     elif http_exc.status_code == 409:
-        code = "CONFLICT"
+        default_code = "CONFLICT"
+    elif http_exc.status_code == 400:
+        default_code = "BAD_REQUEST"
     return _error_response(
         status_code=http_exc.status_code,
-        code=code,
-        message=message,
+        code=default_code,
+        message=str(http_exc.detail),
     )
 
 
@@ -171,82 +71,6 @@ async def _validation_exception_handler(_: Request, exc: Exception) -> JSONRespo
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    mappings: list[tuple[type[Exception], int, str]] = [
-        (GetMenuNotFoundError, 404, "MENU_NOT_FOUND"),
-        (PlaceOrderMenuNotFoundError, 404, "MENU_NOT_FOUND"),
-        (CreateOrderMenuNotFoundError, 404, "MENU_NOT_FOUND"),
-        (GetOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
-        (AcceptOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
-        (ReadyOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
-        (ServedOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
-        (SettledOrderNotFoundError, 404, "ORDER_NOT_FOUND"),
-        (CreateOrderLocationNotFoundError, 404, "LOCATION_NOT_FOUND"),
-        (LocationOrdersLocationNotFoundError, 404, "LOCATION_NOT_FOUND"),
-        (SessionLocationNotFoundError, 404, "LOCATION_NOT_FOUND"),
-        (SessionNotFoundError, 404, "SESSION_NOT_FOUND"),
-        (GetTableNotFoundError, 404, "TABLE_NOT_FOUND"),
-        (PlaceOrderTableNotFoundError, 404, "TABLE_NOT_FOUND"),
-        (TableNotOpenError, 409, "TABLE_NOT_OPEN"),
-        (TableNotOpenForCloseError, 409, "TABLE_NOT_OPEN"),
-        (TableCloseBlockedError, 409, "TABLE_CLOSE_BLOCKED"),
-        (MenuItemUnavailableError, 400, "MENU_ITEM_UNAVAILABLE"),
-        (CreateOrderMenuItemUnavailableError, 400, "MENU_ITEM_UNAVAILABLE"),
-        (InvalidModifierError, 400, "INVALID_MODIFIER"),
-        (CreateOrderInvalidModifierError, 400, "INVALID_MODIFIER"),
-        (InvalidModifierValueError, 400, "INVALID_MODIFIER_VALUE"),
-        (CreateOrderInvalidModifierValueError, 400, "INVALID_MODIFIER_VALUE"),
-        (InvalidOrderSourceError, 400, "INVALID_ORDER_SOURCE"),
-        (CreateOrderInvalidOrderSourceError, 400, "INVALID_ORDER_SOURCE"),
-        (CreateOrderSessionRequiredError, 409, "SESSION_REQUIRED"),
-        (
-            IdempotencyReplayMismatchError,
-            409,
-            "IDEMPOTENCY_KEY_REPLAY_DIFFERENT_PAYLOAD",
-        ),
-        (
-            CreateOrderIdempotencyReplayMismatchError,
-            409,
-            "IDEMPOTENCY_KEY_REPLAY_DIFFERENT_PAYLOAD",
-        ),
-        (
-            AcceptInvalidOrderTransitionError,
-            409,
-            "INVALID_ORDER_TRANSITION",
-        ),
-        (
-            ReadyInvalidOrderTransitionError,
-            409,
-            "INVALID_ORDER_TRANSITION",
-        ),
-        (
-            ServedInvalidOrderTransitionError,
-            409,
-            "INVALID_ORDER_TRANSITION",
-        ),
-        (
-            SettledInvalidOrderTransitionError,
-            409,
-            "INVALID_ORDER_TRANSITION",
-        ),
-        (AcceptOrderConflictError, 409, "CONFLICT"),
-        (ReadyOrderConflictError, 409, "CONFLICT"),
-        (ServedOrderConflictError, 409, "CONFLICT"),
-        (SettledOrderConflictError, 409, "CONFLICT"),
-        (InvalidKitchenQueueStatusError, 400, "INVALID_KITCHEN_QUEUE_STATUS"),
-        (InvalidKitchenQueueCursorError, 400, "INVALID_KITCHEN_QUEUE_CURSOR"),
-        (InvalidTableRegistryStatusError, 400, "INVALID_TABLE_REGISTRY_STATUS"),
-        (InvalidTableRegistryCursorError, 400, "INVALID_TABLE_REGISTRY_CURSOR"),
-        (RestaurantNotFoundError, 404, "RESTAURANT_NOT_FOUND"),
-        (InvalidTableOrdersStatusError, 400, "INVALID_TABLE_ORDERS_STATUS"),
-        (InvalidTableOrdersCursorError, 400, "INVALID_TABLE_ORDERS_CURSOR"),
-        (InvalidLocationFilterError, 400, "INVALID_LOCATION_FILTER"),
-        (InvalidLocationOrdersStatusError, 400, "INVALID_LOCATION_ORDERS_STATUS"),
-        (InvalidLocationOrdersCursorError, 400, "INVALID_LOCATION_ORDERS_CURSOR"),
-        (InvalidSessionFilterError, 400, "INVALID_SESSION_FILTER"),
-    ]
-
-    for exc_cls, status_code, code in mappings:
-        app.add_exception_handler(exc_cls, _exception_handler(status_code, code))
-
+    app.add_exception_handler(DomainError, _domain_error_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)

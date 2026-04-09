@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from rop.application.ports.cache import CacheStore
 from rop.infrastructure.cache.redis_client import get_redis_client
 
 
-class RedisCacheStore(CacheStore):
+class RedisCacheStore:
     def __init__(self, timeout_seconds: float = 1.0) -> None:
         self._timeout_seconds = timeout_seconds
 
